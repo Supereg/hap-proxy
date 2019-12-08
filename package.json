@@ -34,7 +34,7 @@
   },
   "scripts": {
     "build": "rimraf dist/ && tsc",
-    "prepublishOnly": "yarn build",
+    "prepublishOnly": "npm run build",
     "test": "jest"
   },
   "repository": {

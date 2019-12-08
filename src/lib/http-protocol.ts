@@ -1,4 +1,3 @@
-import assert from 'assert';
 import {HTTPHeader, HTTPStatus} from "../HAPClient";
 import createDebug from 'debug';
 
@@ -90,21 +89,16 @@ export class HTTPResponseParser {
                     if (this.responseContent.status === HTTPStatus.NO_CONTENT) {
                         this.responseContent.body = Buffer.alloc(0);
                     } else {
-                        if (this.responseContent.headers![HTTPHeader.CONTENT_LENGTH]) {
-                            /*
-                        let len = parseInt(headers['content-length']);
-                    debug(`Reading ${len} bytes for body...`);
-                    debug(`There are ${buffer::remaining()} bytes left in the buffer`);
-                    if (buffer::remaining() >= len) {
-                        body.append(buffer.nextBuffer(len));
-                    } else {
-                        // the whole message is not in the buffer
-                        // wait till next time
-                        debug('partial message; returning');
-                        return [ [], buffer.buf ];
-                    }
-                         */
-                        } else if (this.responseContent.headers![HTTPHeader.TRANSFER_ENCODING] === "chunked") { // TODO enum
+                        if (this.responseContent.headers![HTTPHeader.CONTENT_LENGTH]) { // typically returned by certified accessories
+                            const length = parseInt(this.responseContent.headers![HTTPHeader.CONTENT_LENGTH]);
+                            const data = this.readFixedLengthBuffer(length);
+
+                            if (data) {
+                                this.responseContent.body = data;
+                            } else { // we could not finish this response, abort
+                                return finishedResponses;
+                            }
+                        } else if (this.responseContent.headers![HTTPHeader.TRANSFER_ENCODING] === "chunked") { // typically returned by hap-nodejs
                             this.responseContent.body = Buffer.alloc(0);
 
                             for(;;) {
@@ -166,13 +160,13 @@ export class HTTPResponseParser {
         }
 
         const terminatorIndex = minimumRequiredLength;
-        if (terminatorIndex < this.buffer.length
+        if (terminatorIndex <= this.buffer.length
             && String.fromCharCode(this.buffer[terminatorIndex]) === '\n') {
             // TODO handle illegal format
             const data = this.buffer.slice(this.readerIndex, minimumRequiredLength);
             this.readerIndex += length + 1;
             return data;
-        } else if (terminatorIndex + 1 < this.buffer.length
+        } else if (terminatorIndex + 1 <= this.buffer.length
             && String.fromCharCode(this.buffer[terminatorIndex]) === "\r" && String.fromCharCode(this.buffer[terminatorIndex+ 1]) === "\n") {
             // TODO handle illegal format
             const data = this.buffer.slice(this.readerIndex, minimumRequiredLength);
@@ -200,6 +194,16 @@ export class HTTPResponseParser {
         const sizeInt = parseInt(size, 16); // lol
         // sizeInt == 0 indicates end of chunked data
         return this.readFixedLengthLine(sizeInt);
+    }
+
+    readFixedLengthBuffer(length: number): Buffer | null {
+        if (this.readerIndex + length > this.buffer.length) {
+            return null; // not enough data
+        }
+
+        const data = this.buffer.slice(this.readerIndex, this.readerIndex + length);
+        this.readerIndex += length;
+        return data;
     }
 
 }

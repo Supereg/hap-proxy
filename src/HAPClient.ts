@@ -228,6 +228,7 @@ export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
 
     handleConnected() {
         debugCon("Successfully connected!");
+        this.emit(HAPClientEvent.CONNECT);
     }
 
     private disconnect() {

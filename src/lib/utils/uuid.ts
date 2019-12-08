@@ -1,4 +1,4 @@
-import crypto, { BinaryLike } from '../crypto';
+import crypto, { BinaryLike } from 'crypto';
 
 // http://stackoverflow.com/a/25951500/66673
 export function generate(data: BinaryLike) {

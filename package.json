@@ -1,7 +1,7 @@
 {
-  "name": "hap-client-control",
+  "name": "hap-proxy",
   "version": "1.0.0",
-  "description": "An HAP client implementation written in Typescript",
+  "description": "An HAP proxy tool written in Typescript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "engines": {
@@ -16,7 +16,6 @@
     "node-persist": "^3.0.5",
     "tweetnacl": "^1.0.1",
     "sharp": "^0.23.3",
-    "sodium": "^3.0.2",
     "uuid": "^3.3.3"
   },
   "devDependencies": {
@@ -40,12 +39,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Supereg/hap-client.git"
+    "url": "https://github.com/Supereg/hap-proxy.git"
   },
   "author": "Andreas Bauer <mail@anderl-bauer.de>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Supereg/hap-client/issues"
+    "url": "https://github.com/Supereg/hap-proxy/issues"
   },
-  "homepage": "https://github.com/Supereg/hap-client"
+  "homepage": "https://github.com/Supereg/hap-proxy"
 }

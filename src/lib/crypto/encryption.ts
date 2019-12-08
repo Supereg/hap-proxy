@@ -1,5 +1,4 @@
 import assert from 'assert';
-import crypto from 'crypto';
 
 import createDebug from 'debug';
 import tweetnacl from 'tweetnacl';

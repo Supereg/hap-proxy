@@ -1,9 +1,9 @@
 import net, {Socket} from 'net';
 import createDebug from 'debug';
 import assert from 'assert';
-import * as tlv from './lib/tlv';
-import * as encryption from './lib/encryption';
-import * as hkdf from './lib/hkdf';
+import * as tlv from './lib/utils/tlv';
+import * as encryption from './lib/crypto/encryption';
+import * as hkdf from './lib/crypto/hkdf';
 import tweetnacl, {SignKeyPair} from 'tweetnacl';
 import srp from 'fast-srp-hap';
 import {HTTPResponse, HTTPResponseParser} from "./lib/http-protocol";

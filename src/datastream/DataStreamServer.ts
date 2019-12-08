@@ -1,8 +1,8 @@
 import createDebug from 'debug';
 import assert from 'assert';
 
-import * as encryption from '../lib/encryption';
-import * as hkdf from '../lib/hkdf';
+import * as encryption from '../lib/crypto/encryption';
+import * as hkdf from '../lib/crypto/hkdf';
 import {DataStreamParser, DataStreamReader, DataStreamWriter, Int64} from './DataStreamParser';
 import crypto from 'crypto';
 import net, {Socket} from 'net';

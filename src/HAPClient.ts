@@ -8,6 +8,7 @@ import tweetnacl, {SignKeyPair} from 'tweetnacl';
 import srp from 'fast-srp-hap';
 import {HTTPResponse, HTTPResponseParser} from "./lib/http-protocol";
 import {ClientInfo} from "./lib/ClientInfo";
+import {EventEmitter} from "./lib/EventEmitter";
 
 const debug = createDebug("HAPClient");
 const debugCon = createDebug("HAPClient:Connection");
@@ -41,6 +42,15 @@ export class HAPClient {
 
     establishConnection() {
         this.connection = new HAPClientConnection(this);
+        this.connection.on(HAPClientEvent.CONNECT, this.handleClientConnected.bind(this));
+    }
+
+    private handleClientConnected() {
+        if (this.clientInfo.paired) {
+            this.connection!.pairVerify();
+        } else {
+            this.pinProvider(pinCode => this.connection!.pair(pinCode));
+        }
     }
 
 }
@@ -177,7 +187,15 @@ export type PairVerifySession = {
 
 export type ResponseHandler = (response: HTTPResponse) => void;
 
-export class HAPClientConnection {
+export enum HAPClientEvent {
+    CONNECT = 'connect',
+}
+
+export type HAPClientEventMap = {
+    [HAPClientEvent.CONNECT]: () => void;
+}
+
+export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
 
     private socket: Socket;
     private parser: HTTPResponseParser;
@@ -185,7 +203,6 @@ export class HAPClientConnection {
     private readonly clientInfo: ClientInfo;
     private readonly host: string;
     private readonly port: number;
-    private readonly pinProvider: PinProvider;
 
     private pairSetupSession?: Partial<PairSetupSession>;
     private pairVerifySession?: Partial<PairVerifySession>;
@@ -193,12 +210,12 @@ export class HAPClientConnection {
     private currentResponseHandler?: ResponseHandler;
 
     constructor(hapClient: HAPClient) {
+        super();
         this.parser = new HTTPResponseParser();
 
         this.clientInfo = hapClient.clientInfo;
         this.host = hapClient.host;
         this.port = hapClient.port;
-        this.pinProvider = hapClient.pinProvider;
 
         debugCon("Opening socket...");
         this.socket = net.createConnection(this.port, this.host);
@@ -211,15 +228,9 @@ export class HAPClientConnection {
 
     handleConnected() {
         debugCon("Successfully connected!");
-
-        if (this.clientInfo.paired) {
-            this.sendPairVerifyM1();
-        } else {
-            this.pinProvider(pinCode => this.pair(pinCode))
-        }
     }
 
-    private abort() {
+    private disconnect() {
         this.pairVerifySession = undefined;
         this.pairSetupSession = undefined;
         this.socket.destroy();
@@ -230,6 +241,10 @@ export class HAPClientConnection {
             pinCode: pin,
         };
         this.sendPairM1();
+    }
+
+    pairVerify() {
+        this.sendPairVerifyM1();
     }
 
     private sendPairM1() {
@@ -252,7 +267,7 @@ export class HAPClientConnection {
 
         if (objects[TLVValues.ERROR_CODE]) {
             debugCon("M2: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -293,7 +308,7 @@ export class HAPClientConnection {
 
         if (objects[TLVValues.ERROR_CODE]) {
             debugCon("M4: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -307,7 +322,7 @@ export class HAPClientConnection {
             srpClient.checkM2(serverProof);
         } catch (error) {
             debugCon("ERROR: srp serverProof could not be verified: " + error.message);
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -375,7 +390,7 @@ export class HAPClientConnection {
 
         if (objects[TLVValues.ERROR_CODE]) {
             debugCon("M6: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -388,7 +403,7 @@ export class HAPClientConnection {
         const plaintextBuffer = Buffer.alloc(encryptedData.length);
         if (!encryption.verifyAndDecrypt(session.encryptionKey!, nonce, encryptedData, authTag, null, plaintextBuffer)) {
             debugCon("M6: Could not verify and decrypt!");
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -409,7 +424,7 @@ export class HAPClientConnection {
         ]);
         if (!tweetnacl.sign.detached.verify(accessoryInfo, accessorySignature, accessoryLTPK)) {
             debugCon("M6: Could not verify accessory signature!");
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -457,7 +472,7 @@ export class HAPClientConnection {
 
         if (error) {
             debugCon("Pair-Verify M2 returned with error: " + ErrorCodes[error[0]]);
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -486,7 +501,7 @@ export class HAPClientConnection {
         const nonce = Buffer.from("PV-Msg02");
         if (!encryption.verifyAndDecrypt(encryptionKey, nonce, cipherText, authTag, null, plaintext)) {
             console.error("WARNING: M2 - Could not verify cipherText");
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -499,7 +514,7 @@ export class HAPClientConnection {
         // We do however only support one pairing, thus check if ids match
         if (this.clientInfo.accessoryIdentifier !== accessoryIdentifier.toString()) {
             console.error("WARNING: identifier is not the expected store in the keystore");
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -512,7 +527,7 @@ export class HAPClientConnection {
 
         if (!tweetnacl.sign.detached.verify(accessoryInfo, accessorySignature, this.clientInfo.accessoryLTPK)) {
             debugCon("M2: Failed in pair-verify to verify accessory signature!");
-            this.abort();
+            this.disconnect();
             return;
         }
 
@@ -569,7 +584,7 @@ export class HAPClientConnection {
         this.pairVerifySession = undefined;
         if (error) {
             debugCon("Pair-Verify was unsuccessful: " + ErrorCodes[error[0]]);
-            this.abort();
+            this.disconnect();
         } else {
             debugCon("Pair-Verify was successful");
         }

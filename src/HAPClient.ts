@@ -182,7 +182,7 @@ export type PairVerifySession = {
 
     // M2
     sharedSecret: Buffer;
-    encryptionKey: Buffer;
+    encryptionKey: Buffer; // pair very encryption key
 }
 
 export type ResponseHandler = (response: HTTPResponse) => void;
@@ -195,6 +195,24 @@ export type HAPClientEventMap = {
     [HAPClientEvent.CONNECT]: () => void;
 }
 
+export class HAPEncryptionContext {
+
+    sharedSecret: Buffer;
+
+    accessoryToControllerKey: Buffer;
+    accessoryToControllerNonce: number = 0;
+    controllerToAccessoryKey: Buffer;
+    controllerToAccessoryNonce: number = 0;
+    frameBuffer?: Buffer; // used to store incomplete frames
+
+    constructor(sharedSecret: Buffer, accessoryToControllerKey: Buffer, controllerToAccessoryKey: Buffer) {
+        this.sharedSecret = sharedSecret;
+        this.accessoryToControllerKey = accessoryToControllerKey;
+        this.controllerToAccessoryKey = controllerToAccessoryKey;
+    }
+
+}
+
 export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
 
     private socket: Socket;
@@ -203,6 +221,8 @@ export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
     private readonly clientInfo: ClientInfo;
     private readonly host: string;
     private readonly port: number;
+
+    private encryptionContext?: HAPEncryptionContext;
 
     private pairSetupSession?: Partial<PairSetupSession>;
     private pairVerifySession?: Partial<PairVerifySession>;
@@ -567,8 +587,6 @@ export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
             TLVValues.ENCRYPTED_DATA, Buffer.concat([cipherText, authTag]),
         );
 
-        // TODO save encryption keys
-
         // Step 12
         this.sendRequest(HTTPMethod.POST, HTTPRoutes.PAIR_VERIFY, HTTPContentType.PAIRING_TLV8, this.handlePairVerifyM4.bind(this), finishRequest);
     }
@@ -582,6 +600,19 @@ export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
 
         assert.strictEqual(state, States.M4, "PairVerify state did not match M4");
 
+        const session = this.pairVerifySession!;
+        const sharedSecret = session.sharedSecret!;
+
+        // generate HAP encryption/decryption keys
+        const salt = Buffer.from("Control-Salt");
+        const accessoryToControllerInfo = Buffer.from("Control-Read-Encryption-Key");
+        const controllerToAccessoryInfo = Buffer.from("Control-Write-Encryption-Key");
+
+        const accessoryToControllerKey = hkdf.HKDF("sha512", salt, sharedSecret, accessoryToControllerInfo, 32);
+        const controllerToAccessoryKey = hkdf.HKDF("sha512", salt, sharedSecret, controllerToAccessoryInfo, 32);
+
+        this.encryptionContext = new HAPEncryptionContext(sharedSecret, accessoryToControllerKey, controllerToAccessoryKey);
+
         this.pairVerifySession = undefined;
         if (error) {
             debugCon("Pair-Verify was unsuccessful: " + ErrorCodes[error[0]]);
@@ -589,17 +620,21 @@ export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
         } else {
             debugCon("Pair-Verify was successful");
         }
-        // TODO install encryption and decryption layers
     }
 
     handleIncomingData(data: Buffer) {
+        if (this.encryptionContext) {
+            data = encryption.layerDecrypt(data, this.encryptionContext);
+        }
+
         this.parser.appendData(data);
 
         const messages: HTTPResponse[] = this.parser.parse();
 
         messages.forEach(message => {
             if (message.messageType === "EVENT") {
-                console.log("RECEVIED EVENT");
+                console.log("RECEIVED EVENT");
+                console.log(message);
             } else if (message.messageType === "HTTP") {
                 if (this.currentResponseHandler) {
                     const handler = this.currentResponseHandler;
@@ -630,7 +665,7 @@ export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
             data = Buffer.alloc(0);
         }
 
-        const request = Buffer.concat([
+        let request = Buffer.concat([
             Buffer.from(
                 `${method} ${route} HTTP/1.1\r\n` +
                 `Host: ${this.host}:${this.port}\r\n` +
@@ -643,7 +678,11 @@ export class HAPClientConnection extends EventEmitter<HAPClientEventMap> {
         ]);
 
         this.currentResponseHandler = handler;
-        // TODO encryption layer
+
+        if (this.encryptionContext) {
+            request = encryption.layerEncrypt(request, this.encryptionContext);
+        }
+
         this.socket.write(request);
     }
 

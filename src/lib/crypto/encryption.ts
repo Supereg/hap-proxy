@@ -4,6 +4,7 @@ import createDebug from 'debug';
 import tweetnacl from 'tweetnacl';
 
 import * as chacha20poly1305 from './chacha20poly1305';
+import {HAPEncryptionContext} from "../../HAPClient";
 
 const debug = createDebug('encryption');
 
@@ -36,7 +37,7 @@ type Count = {
   value: any;
 }
 
-export function layerEncrypt(data: Buffer, count: Count, key: Buffer) {
+export function layerEncrypt(data: Buffer, context: HAPEncryptionContext) {
   let result = Buffer.alloc(0);
   const total = data.length;
   for (let offset = 0; offset < total; ) {
@@ -45,11 +46,11 @@ export function layerEncrypt(data: Buffer, count: Count, key: Buffer) {
     leLength.writeUInt16LE(length,0);
 
     const nonce = Buffer.alloc(8);
-    writeUInt64LE(count.value++, nonce, 0);
+    writeUInt64LE(context.controllerToAccessoryNonce++, nonce, 0);
 
     const result_Buffer = Buffer.alloc(length);
     const result_mac = Buffer.alloc(16);
-    encryptAndSeal(key, nonce, data.slice(offset, offset + length),
+    encryptAndSeal(context.controllerToAccessoryKey, nonce, data.slice(offset, offset + length),
       leLength,result_Buffer, result_mac);
 
     offset += length;
@@ -59,10 +60,10 @@ export function layerEncrypt(data: Buffer, count: Count, key: Buffer) {
   return result;
 }
 
-export function layerDecrypt(packet: Buffer, count: Count, key: Buffer, extraInfo: Record<string, any>) {
+export function layerDecrypt(packet: Buffer, context: HAPEncryptionContext) {
   // Handle Extra Info
-  if (extraInfo.leftoverData != undefined) {
-    packet = Buffer.concat([extraInfo.leftoverData, packet]);
+  if (context.frameBuffer != undefined) {
+    packet = Buffer.concat([context.frameBuffer, packet]);
   }
 
   let result = Buffer.alloc(0);
@@ -74,18 +75,18 @@ export function layerDecrypt(packet: Buffer, count: Count, key: Buffer, extraInf
     const availableDataLength = total - offset - 2 - 16;
     if (realDataLength > availableDataLength) {
       // Fragmented packet
-      extraInfo.leftoverData = packet.slice(offset);
+      context.frameBuffer = packet.slice(offset);
       break;
     } else {
-      extraInfo.leftoverData = undefined;
+      context.frameBuffer = undefined;
     }
 
     const nonce = Buffer.alloc(8);
-    writeUInt64LE(count.value++, nonce, 0);
+    writeUInt64LE(context.accessoryToControllerNonce++, nonce, 0);
 
     const result_Buffer = Buffer.alloc(realDataLength);
 
-    if (verifyAndDecrypt(key, nonce, packet.slice(offset + 2, offset + 2 + realDataLength),
+    if (verifyAndDecrypt(context.accessoryToControllerKey, nonce, packet.slice(offset + 2, offset + 2 + realDataLength),
       packet.slice(offset + 2 + realDataLength, offset + 2 + realDataLength + 16),
       packet.slice(offset,offset+2),result_Buffer)) {
         result = Buffer.concat([result,result_Buffer]);

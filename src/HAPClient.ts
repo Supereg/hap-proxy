@@ -409,7 +409,7 @@ export class HAPClientConnection {
         debugCon("Sending pair setup M3");
 
         return new Promise<void>(resolve => {
-            this.pairSetupSession?.pinProvider!(pinCode => {
+            this.pairSetupSession!.pinProvider!(pinCode => {
                 srp.genKey(32, (err, key) => {
                     const srpParams = srp.params['3072'];
                     const client = new srp.Client(srpParams, salt, Buffer.from("Pair-Setup"), Buffer.from(pinCode), key);

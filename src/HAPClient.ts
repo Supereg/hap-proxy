@@ -36,7 +36,7 @@ export class HAPClient {
 
     host: string;
     port: number;
-    pinProvider: PinProvider;
+    private readonly pinProvider: PinProvider;
 
     connection: HAPClientConnection;
 
@@ -102,7 +102,8 @@ export class HAPClient {
 
         const body = Buffer.from(JSON.stringify(request));
 
-        return this.connection.put(HTTPRoutes.ACCESSORIES, body);
+        return this.currentChain = this.ensurePairingVerified()
+            .then(() => this.connection.put(HTTPRoutes.CHARACTERISTICS, body));
     }
 
     prepareWrite(ttl: number, pid?: number): Promise<number> {

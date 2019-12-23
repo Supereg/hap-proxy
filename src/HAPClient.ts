@@ -5,24 +5,24 @@ import crypto from 'crypto';
 import * as tlv from './lib/utils/tlv';
 import * as encryption from './lib/crypto/encryption';
 import * as hkdf from './lib/crypto/hkdf';
-import tweetnacl, {SignKeyPair} from 'tweetnacl';
+import tweetnacl from 'tweetnacl';
 import srp from 'fast-srp-hap';
-import {HTTPResponse, HTTPResponseParser} from "./lib/http-protocol";
-import {ClientInfo} from "./lib/ClientInfo";
+import {HTTPContentType, HTTPMethod, HTTPResponse, HTTPResponseParser, HTTPRoutes} from "./lib/http-protocol";
+import {ClientInfo} from "./lib/storage/ClientInfo";
 
 const debug = createDebug("HAPClient");
 const debugCon = createDebug("HAPClient:Connection");
 
 export type PinProvider = (callback: (pinCode: string) => void) => void;
 
-export type CharacteristicsGetRequest = {
+export interface Characteristic {
     aid: number,
     iid: number,
 }
 
-export type CharacteristicsSetRequest = {
-    aid: number,
-    iid: number,
+export interface CharacteristicsGetRequest extends Characteristic {}
+
+export interface CharacteristicsSetRequest extends Characteristic {
     value: any,
     ev?: boolean,
     authData?: string,
@@ -106,9 +106,11 @@ export class HAPClient {
             .then(() => this.connection.put(HTTPRoutes.CHARACTERISTICS, body));
     }
 
+    // TODO subscribe to events
+
     prepareWrite(ttl: number, pid?: number): Promise<number> {
         if (pid === undefined) {
-            pid = this.randomPid();
+            pid = this.genRandomPid();
         }
 
         const body = Buffer.from(JSON.stringify({
@@ -128,7 +130,44 @@ export class HAPClient {
             }));
     }
 
-    randomPid(): number {
+    // TODO /resource
+
+    // TODO addPairing
+
+    // TODO removePairing
+
+    /**
+     * Sends the request to remove a pairing. When clientId is omitted the own pairing will be removed.
+     *
+     * @param clientId - identifier of the pairing which will be removed (optional, defaults to own id)
+     */
+    removePairing(clientId?: string) {
+        // step 1
+        if (!clientId) {
+            clientId = this.clientInfo.clientId;
+        }
+
+        // step 2
+        const requestTLV = tlv.encode(
+            TLVValues.STATE, HAPStates.M1,
+            TLVValues.METHOD, PairMethods.REMOVE_PAIRING,
+            TLVValues.IDENTIFIER, Buffer.from(clientId),
+        );
+
+        // step 3
+        return this.currentChain = this.ensurePairingVerified()
+            .then(() => this.connection.sendPairRequest(HTTPRoutes.PAIRINGS, requestTLV))
+            .then(response => {
+                const body = response.body;
+                const responseTlv = tlv.decode(body);
+                // TODO validate response
+
+                console.log("received pairings body tlv");
+                console.log(responseTlv);
+            });
+    }
+
+    genRandomPid(): number {
         const ran = crypto.randomBytes(2);
         return ran.readUInt16LE(0);
     }
@@ -141,29 +180,7 @@ export class HAPClient {
 
 }
 
-export enum HTTPMethod {
-    GET = "GET",
-    POST = "POST",
-    PUT = "PUT",
-}
-
-export enum HTTPContentType {
-    JSON = "application/json",
-    PAIRING_TLV8 = "application/pairing+tlv8",
-}
-
-export enum HTTPRoutes {
-    // noinspection JSUnusedGlobalSymbols
-    IDENTIFY = '/identify',
-    PAIR_SETUP = "/pair-setup",
-    PAIR_VERIFY = "/pair-verify",
-    PAIRINGS = "/pairings",
-    ACCESSORIES = "/accessories",
-    CHARACTERISTICS = "/characteristics",
-    PREPARE = "/prepare",
-    RESOURCE = "/resource",
-}
-
+// TODO move
 export enum TLVValues {
     // noinspection JSUnusedGlobalSymbols
     METHOD = 0x00,
@@ -173,7 +190,7 @@ export enum TLVValues {
     PROOF = 0x04,
     ENCRYPTED_DATA = 0x05,
     STATE = 0x06,
-    ERROR_CODE = 0x07,
+    ERROR = 0x07,
     RETRY_DELAY = 0x08,
     CERTIFICATE = 0x09, // x.509 certificate
     SIGNATURE = 0x0A,  // ed25519
@@ -184,6 +201,7 @@ export enum TLVValues {
     SEPARATOR = 0x0FF // Zero-length TLV that separates different TLVs in a list.
 }
 
+// TODO move
 // noinspection JSUnusedGlobalSymbols
 export enum PairingFlags {
     // noinspection JSUnusedGlobalSymbols
@@ -191,6 +209,7 @@ export enum PairingFlags {
     SPLIT_PAIR_SETUP = 0x1000000,
 }
 
+// TODO move
 export enum PairMethods {
     // noinspection JSUnusedGlobalSymbols
     PAIR_SETUP = 0x00,
@@ -201,7 +220,8 @@ export enum PairMethods {
     LIST_PAIRINGS = 0x05
 }
 
-export enum States {
+// TODO move
+export enum HAPStates {
     M1 = 0x01,
     M2 = 0x02,
     M3 = 0x03,
@@ -210,8 +230,9 @@ export enum States {
     M6 = 0x06
 }
 
+// TODO move
 // Error codes and the like, guessed by packet inspection
-export enum ErrorCodes {
+export enum TLVErrors {
     // noinspection JSUnusedGlobalSymbols
     UNKNOWN = 0x01,
     INVALID_REQUEST = 0x02,
@@ -223,6 +244,7 @@ export enum ErrorCodes {
     BUSY = 0x07 // cannot accept pairing request at this time
 }
 
+// TODO move
 // noinspection JSUnusedGlobalSymbols
 export enum HAPStatusCode {
     // noinspection JSUnusedGlobalSymbols
@@ -240,24 +262,10 @@ export enum HAPStatusCode {
     INSUFFICIENT_AUTHORIZATION = -70411
 }
 
-export enum HTTPHeader {
-    // noinspection JSUnusedGlobalSymbols
-    CONTENT_TYPE = "Content-Type",
-    DATE = "Date",
-    CONNECTION = "Connection",
-    TRANSFER_ENCODING = "Transfer-Encoding",
-    CONTENT_LENGTH = "Content-Length",
-}
-
-export enum HTTPStatus {
-    NO_CONTENT = 204,
-}
-
-export type PairSetupSession = {
+export type ClientPairSetupSession = {
     pinProvider: PinProvider,
     srpClient: srp.Client,
-    longTerm: SignKeyPair,
-    encryptionKey: Buffer,
+    sessionKey: Buffer,
 }
 
 export type PairVerifySession = {
@@ -268,7 +276,6 @@ export type PairVerifySession = {
 
     // M2
     sharedSecret: Buffer;
-    encryptionKey: Buffer; // pair very encryption key
 }
 
 export type ResponseHandler = (response: HTTPResponse) => void;
@@ -277,16 +284,16 @@ export class HAPEncryptionContext {
 
     sharedSecret: Buffer;
 
-    accessoryToControllerKey: Buffer;
-    accessoryToControllerNonce: number = 0;
-    controllerToAccessoryKey: Buffer;
-    controllerToAccessoryNonce: number = 0;
+    encryptionKey: Buffer;
+    encryptionNonce: number = 0;
+    decryptionKey: Buffer;
+    decryptionNonce: number = 0;
     frameBuffer?: Buffer; // used to store incomplete frames
 
-    constructor(sharedSecret: Buffer, accessoryToControllerKey: Buffer, controllerToAccessoryKey: Buffer) {
+    constructor(sharedSecret: Buffer, encryptionKey: Buffer, decryptionKey: Buffer) {
         this.sharedSecret = sharedSecret;
-        this.accessoryToControllerKey = accessoryToControllerKey;
-        this.controllerToAccessoryKey = controllerToAccessoryKey;
+        this.encryptionKey = encryptionKey;
+        this.decryptionKey = decryptionKey;
     }
 
 }
@@ -302,7 +309,7 @@ export class HAPClientConnection {
 
     private encryptionContext?: HAPEncryptionContext;
 
-    private pairSetupSession?: Partial<PairSetupSession>;
+    private pairSetupSession?: Partial<ClientPairSetupSession>;
     private pairVerifySession?: Partial<PairVerifySession>;
 
     private httpRequestResolver?: (value?: HTTPResponse | PromiseLike<HTTPResponse>) => void;
@@ -375,15 +382,16 @@ export class HAPClientConnection {
         return this.sendPairVerifyM1();
     }
 
+    // TODO move pairing stuff up to the client not to the connection level
     private sendPairM1(): Promise<void> {
         debugCon("Sending pair setup M1");
 
         const startRequest = tlv.encode(
-            TLVValues.STATE, States.M1,
+            TLVValues.STATE, HAPStates.M1,
             TLVValues.METHOD, PairMethods.PAIR_SETUP,
         );
 
-        return this.sendPairingRequest(HTTPRoutes.PAIR_SETUP, startRequest)
+        return this.sendPairRequest(HTTPRoutes.PAIR_SETUP, startRequest)
             .then(this.handlePairM2.bind(this));
     }
 
@@ -392,12 +400,12 @@ export class HAPClientConnection {
 
         const objects = tlv.decode(response.body);
         const state = objects[TLVValues.STATE][0];
-        assert(state === States.M2, "Response was not in state M2");
+        assert(state === HAPStates.M2, "Response was not in state M2");
 
-        if (objects[TLVValues.ERROR_CODE]) {
-            debugCon("M2: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
+        if (objects[TLVValues.ERROR]) {
+            debugCon("M2: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
             this.disconnect();
-            return Promise.reject("M2: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
+            return Promise.reject("M2: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
         }
 
         const serverPublicKey = objects[TLVValues.PUBLIC_KEY];
@@ -420,12 +428,12 @@ export class HAPClientConnection {
                     const M1 = client.computeM1();
 
                     const verifyRequest = tlv.encode(
-                        TLVValues.STATE, States.M3,
+                        TLVValues.STATE, HAPStates.M3,
                         TLVValues.PUBLIC_KEY, A,
                         TLVValues.PROOF, M1,
                     );
 
-                    this.sendPairingRequest(HTTPRoutes.PAIR_SETUP, verifyRequest)
+                    this.sendPairRequest(HTTPRoutes.PAIR_SETUP, verifyRequest)
                         .then(this.handlePairM4.bind(this))
                         .then(resolve);
                 });
@@ -438,12 +446,12 @@ export class HAPClientConnection {
 
         const objects = tlv.decode(response.body);
         const state = objects[TLVValues.STATE][0];
-        assert(state === States.M4, "Response was not in state M4");
+        assert(state === HAPStates.M4, "Response was not in state M4");
 
-        if (objects[TLVValues.ERROR_CODE]) {
-            debugCon("M4: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
+        if (objects[TLVValues.ERROR]) {
+            debugCon("M4: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
             this.disconnect();
-            return Promise.reject("M4: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
+            return Promise.reject("M4: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
         }
 
         const session = this.pairSetupSession!;
@@ -474,9 +482,10 @@ export class HAPClientConnection {
 
         // step 1 (LT keys already generated)
 
-        // step 2 derive iOSDeviceX
+        // step 2
         let salt = Buffer.from("Pair-Setup-Controller-Sign-Salt");
         let info = Buffer.from("Pair-Setup-Controller-Sign-Info");
+        // TODO save shared secret in field. no need to use srpClient here
         const iOSDeviceX = hkdf.HKDF("sha512", salt, srpClient.computeK(), info, 32);
 
         // step 3
@@ -499,20 +508,20 @@ export class HAPClientConnection {
         // step 6
         salt = Buffer.from("Pair-Setup-Encrypt-Salt");
         info = Buffer.from("Pair-Setup-Encrypt-Info");
-        session.encryptionKey = hkdf.HKDF("sha512", salt, srpClient.computeK(), info, 32);
+        session.sessionKey = hkdf.HKDF("sha512", salt, srpClient.computeK(), info, 32);
 
         const nonce = Buffer.from("PS-Msg05");
         const encryptedData = Buffer.alloc(subTLV.length);
         const authTag = Buffer.alloc(16);
-        encryption.encryptAndSeal(session.encryptionKey, nonce, subTLV, null, encryptedData, authTag);
+        encryption.encryptAndSeal(session.sessionKey, nonce, subTLV, null, encryptedData, authTag);
 
         // step 7
         const exchangeRequest = tlv.encode(
-            TLVValues.STATE, States.M5,
+            TLVValues.STATE, HAPStates.M5,
             TLVValues.ENCRYPTED_DATA, Buffer.concat([encryptedData, authTag]),
         );
 
-        return this.sendPairingRequest(HTTPRoutes.PAIR_SETUP, exchangeRequest)
+        return this.sendPairRequest(HTTPRoutes.PAIR_SETUP, exchangeRequest)
             .then(this.handlePairM6.bind(this));
     }
 
@@ -522,12 +531,12 @@ export class HAPClientConnection {
 
         const objects = tlv.decode(response.body);
         const state = objects[TLVValues.STATE][0];
-        assert(state === States.M6, "Response was not in state M6");
+        assert(state === HAPStates.M6, "Response was not in state M6");
 
-        if (objects[TLVValues.ERROR_CODE]) {
-            debugCon("M6: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
+        if (objects[TLVValues.ERROR]) {
+            debugCon("M6: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
             this.disconnect();
-            return Promise.reject("M6: received error code " + ErrorCodes[objects[TLVValues.ERROR_CODE][0]]);
+            return Promise.reject("M6: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
         }
 
         // step 1 + 2
@@ -537,7 +546,7 @@ export class HAPClientConnection {
 
         const nonce = Buffer.from("PS-Msg06");
         const plaintextBuffer = Buffer.alloc(encryptedData.length);
-        if (!encryption.verifyAndDecrypt(session.encryptionKey!, nonce, encryptedData, authTag, null, plaintextBuffer)) {
+        if (!encryption.verifyAndDecrypt(session.sessionKey!, nonce, encryptedData, authTag, null, plaintextBuffer)) {
             debugCon("M6: Could not verify and decrypt!");
             this.disconnect();
             return Promise.reject("M6: Could not verify and decrypt!");
@@ -588,11 +597,11 @@ export class HAPClientConnection {
         };
 
         const startRequest = tlv.encode(
-            TLVValues.STATE, States.M1,
+            TLVValues.STATE, HAPStates.M1,
             TLVValues.PUBLIC_KEY, publicKey
         );
 
-        return this.sendPairingRequest(HTTPRoutes.PAIR_VERIFY, startRequest)
+        return this.sendPairRequest(HTTPRoutes.PAIR_VERIFY, startRequest)
             .then(this.handlePairVerifyM2.bind(this));
     }
 
@@ -601,16 +610,16 @@ export class HAPClientConnection {
 
         const objects = tlv.decode(response.body);
         const state = objects[TLVValues.STATE].readUInt8(0);
-        const error = objects[TLVValues.ERROR_CODE];
+        const error = objects[TLVValues.ERROR];
         const serverPublicKey = objects[TLVValues.PUBLIC_KEY];
         const encryptedData = objects[TLVValues.ENCRYPTED_DATA];
 
-        assert.strictEqual(state, States.M2, "PairVerify state did not match M2");
+        assert.strictEqual(state, HAPStates.M2, "PairVerify state did not match M2");
 
         if (error) {
-            debugCon("Pair-Verify M2 returned with error: " + ErrorCodes[error[0]]);
+            debugCon("Pair-Verify M2 returned with error: " + TLVErrors[error[0]]);
             this.disconnect();
-            return Promise.reject("Pair-Verify M2 returned with error: " + ErrorCodes[error[0]]);
+            return Promise.reject("Pair-Verify M2 returned with error: " + TLVErrors[error[0]]);
         }
 
         assert.strictEqual(serverPublicKey.length, 32, "serverPublicKey must be 32 bytes");
@@ -625,10 +634,9 @@ export class HAPClientConnection {
         // Step 2
         const encryptionSalt = Buffer.from("Pair-Verify-Encrypt-Salt");
         const encryptionInfo = Buffer.from("Pair-Verify-Encrypt-Info");
-        const encryptionKey = hkdf.HKDF("sha512", encryptionSalt, sharedSecret, encryptionInfo, 32);
+        const sessionKey = hkdf.HKDF("sha512", encryptionSalt, sharedSecret, encryptionInfo, 32);
 
         session.sharedSecret = sharedSecret;
-        session.encryptionKey = encryptionKey;
 
         // Step 3 & 4
         const cipherText = encryptedData.slice(0, -16);
@@ -636,7 +644,7 @@ export class HAPClientConnection {
         const plaintext = Buffer.alloc(cipherText.length);
 
         const nonce = Buffer.from("PV-Msg02");
-        if (!encryption.verifyAndDecrypt(encryptionKey, nonce, cipherText, authTag, null, plaintext)) {
+        if (!encryption.verifyAndDecrypt(sessionKey, nonce, cipherText, authTag, null, plaintext)) {
             console.error("WARNING: M2 - Could not verify cipherText");
             this.disconnect();
             return Promise.reject("WARNING: M2 - Could not verify cipherText");
@@ -668,7 +676,7 @@ export class HAPClientConnection {
             return Promise.reject("M2: Failed in pair-verify to verify accessory signature!");
         }
 
-        return this.sendPairVerifyM3(serverPublicKey, encryptionKey);
+        return this.sendPairVerifyM3(serverPublicKey, sessionKey);
     }
 
     private sendPairVerifyM3(serverPublicKey: Buffer, encryptionKey: Buffer): Promise<void> {
@@ -699,12 +707,12 @@ export class HAPClientConnection {
 
         // Step 11
         const finishRequest = tlv.encode(
-            TLVValues.STATE, States.M3,
+            TLVValues.STATE, HAPStates.M3,
             TLVValues.ENCRYPTED_DATA, Buffer.concat([cipherText, authTag]),
         );
 
         // Step 12
-        return this.sendPairingRequest(HTTPRoutes.PAIR_VERIFY, finishRequest)
+        return this.sendPairRequest(HTTPRoutes.PAIR_VERIFY, finishRequest)
             .then(this.handlePairVerifyM4.bind(this));
     }
 
@@ -713,14 +721,15 @@ export class HAPClientConnection {
 
         const objects = tlv.decode(response.body);
         const state = objects[TLVValues.STATE].readUInt8(0);
-        const error = objects[TLVValues.ERROR_CODE];
+        const error = objects[TLVValues.ERROR];
 
-        assert.strictEqual(state, States.M4, "PairVerify state did not match M4");
+        assert.strictEqual(state, HAPStates.M4, "PairVerify state did not match M4");
 
         const session = this.pairVerifySession!;
         const sharedSecret = session.sharedSecret!;
 
         // generate HAP encryption/decryption keys
+        // TODO no need to generate keys if verification has failed (lol)
         const salt = Buffer.from("Control-Salt");
         const accessoryToControllerInfo = Buffer.from("Control-Read-Encryption-Key");
         const controllerToAccessoryInfo = Buffer.from("Control-Write-Encryption-Key");
@@ -728,13 +737,13 @@ export class HAPClientConnection {
         const accessoryToControllerKey = hkdf.HKDF("sha512", salt, sharedSecret, accessoryToControllerInfo, 32);
         const controllerToAccessoryKey = hkdf.HKDF("sha512", salt, sharedSecret, controllerToAccessoryInfo, 32);
 
-        this.encryptionContext = new HAPEncryptionContext(sharedSecret, accessoryToControllerKey, controllerToAccessoryKey);
+        this.encryptionContext = new HAPEncryptionContext(sharedSecret, controllerToAccessoryKey, accessoryToControllerKey);
 
         this.pairVerifySession = undefined;
         if (error) {
-            debugCon("Pair-Verify was unsuccessful: " + ErrorCodes[error[0]]);
+            debugCon("Pair-Verify was unsuccessful: " + TLVErrors[error[0]]);
             this.disconnect();
-            return Promise.reject("pair-verfy was unsuccessful: " + ErrorCodes[error[0]]);
+            return Promise.reject("pair-verify was unsuccessful: " + TLVErrors[error[0]]);
         } else {
             debugCon("Pair-Verify was successful");
             this.pairingVerified = true;
@@ -745,7 +754,7 @@ export class HAPClientConnection {
 
     handleIncomingData(data: Buffer) {
         if (this.encryptionContext) {
-            data = encryption.layerDecrypt(data, this.encryptionContext);
+            data = encryption.layerDecrypt(data, this.encryptionContext); // TODO handle exception
         }
 
         this.parser.appendData(data);
@@ -771,14 +780,14 @@ export class HAPClientConnection {
     }
 
     get(route: HTTPRoutes, queryParams: Record<string, string> = {}, headers: Record<string, string> = {}): Promise<HTTPResponse> {
-        return this.sendRequest(HTTPMethod.GET, route, HTTPContentType.JSON, queryParams, headers);
+        return this.sendRequest(HTTPMethod.GET, route, HTTPContentType.HAP_JSON, queryParams, headers);
     }
 
     put(route: HTTPRoutes, data: Buffer, queryParams: Record<string, string> = {}, headers: Record<string,string> = {}): Promise<HTTPResponse> {
-        return this.sendRequest(HTTPMethod.PUT, route, HTTPContentType.JSON, queryParams, headers, data);
+        return this.sendRequest(HTTPMethod.PUT, route, HTTPContentType.HAP_JSON, queryParams, headers, data);
     }
 
-    private sendPairingRequest(route: HTTPRoutes, data?: Buffer): Promise<HTTPResponse> {
+    sendPairRequest(route: HTTPRoutes, data?: Buffer): Promise<HTTPResponse> {
         return this.sendRequest(HTTPMethod.POST, route, HTTPContentType.PAIRING_TLV8, {}, {}, data);
     }
 

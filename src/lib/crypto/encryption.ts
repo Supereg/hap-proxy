@@ -46,11 +46,11 @@ export function layerEncrypt(data: Buffer, context: HAPEncryptionContext) {
     leLength.writeUInt16LE(length,0);
 
     const nonce = Buffer.alloc(8);
-    writeUInt64LE(context.controllerToAccessoryNonce++, nonce, 0);
+    writeUInt64LE(context.encryptionNonce++, nonce, 0);
 
     const result_Buffer = Buffer.alloc(length);
     const result_mac = Buffer.alloc(16);
-    encryptAndSeal(context.controllerToAccessoryKey, nonce, data.slice(offset, offset + length),
+    encryptAndSeal(context.encryptionKey, nonce, data.slice(offset, offset + length),
       leLength,result_Buffer, result_mac);
 
     offset += length;
@@ -82,11 +82,11 @@ export function layerDecrypt(packet: Buffer, context: HAPEncryptionContext) {
     }
 
     const nonce = Buffer.alloc(8);
-    writeUInt64LE(context.accessoryToControllerNonce++, nonce, 0);
+    writeUInt64LE(context.decryptionNonce++, nonce, 0);
 
     const result_Buffer = Buffer.alloc(realDataLength);
 
-    if (verifyAndDecrypt(context.accessoryToControllerKey, nonce, packet.slice(offset + 2, offset + 2 + realDataLength),
+    if (verifyAndDecrypt(context.decryptionKey, nonce, packet.slice(offset + 2, offset + 2 + realDataLength),
       packet.slice(offset + 2 + realDataLength, offset + 2 + realDataLength + 16),
       packet.slice(offset,offset+2),result_Buffer)) {
         result = Buffer.concat([result,result_Buffer]);

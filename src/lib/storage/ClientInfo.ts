@@ -1,10 +1,8 @@
-import storage from 'node-persist';
 import util from 'util';
 import tweetnacl from 'tweetnacl';
+import {StorageManager} from "./storage";
 
 export class ClientInfo {
-
-    private static storageInit: boolean = false;
 
     readonly clientId: string;
 
@@ -29,17 +27,17 @@ export class ClientInfo {
             accessoryLTPK: this.paired? this.accessoryLTPK.toString("hex"): undefined,
         };
 
-        const storageKey = ClientInfo.formatPersistKey(this.clientId);
-        await ClientInfo.init();
+        const storageKey = StorageManager.clientFormatPersistKey(this.clientId);
+        await StorageManager.init();
 
-        await storage.setItem(storageKey, saved);
+        await StorageManager.setItem(storageKey, saved);
     }
 
     static async loadOrCreate(clientId: string) {
-        const storageKey = ClientInfo.formatPersistKey(clientId);
+        const storageKey = StorageManager.clientFormatPersistKey(clientId);
 
-        await ClientInfo.init();
-        const saved = await storage.getItem(storageKey);
+        await StorageManager.init();
+        const saved = await StorageManager.getItem(storageKey);
 
         if (saved) {
             const clientInfo = new ClientInfo(clientId);
@@ -61,18 +59,9 @@ export class ClientInfo {
             clientInfo.longTermPublicKey = Buffer.from(longTerm.publicKey);
             clientInfo.longTermSecretKey = Buffer.from(longTerm.secretKey);
 
+            await clientInfo.save();
+
             return clientInfo;
-        }
-    }
-
-    static formatPersistKey(clientId: string) {
-        return util.format("ClientInfo.%s.json", clientId.toUpperCase());
-    }
-
-    static async init() {
-        if (!this.storageInit) {
-            this.storageInit = true;
-            await storage.init(); // TODO storage path?
         }
     }
 

@@ -7,9 +7,12 @@ export class HAPProxy {
     private server: HAPServer;
 
 
-    constructor(client: HAPClient, server: HAPServer) { // use the same stuff as HAPClient info maybe?
+    constructor(client: HAPClient, server: HAPServer) {
         this.client = client;
         this.server = server;
     }
+
+    // TODO /accessories: check for dataStream management characteristics; change the value of the accessory information name characteristic
+    // TODO track event subscriptions
 
 }

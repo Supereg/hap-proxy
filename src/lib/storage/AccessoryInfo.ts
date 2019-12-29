@@ -1,8 +1,9 @@
 import {StorageManager} from "./storage";
 import tweetnacl from "tweetnacl";
 import crypto from "crypto";
-import {HAPAccessoryCategory, HAPServerConnection} from "../../HAPServer";
+import {HAPServerConnection} from "../../HAPServer";
 import {SetupCodeGenerator} from "../setup-code";
+import {HAPAccessoryCategory} from "../../types/hap-proxy";
 
 export enum PermissionTypes {
     USER = 0x00,

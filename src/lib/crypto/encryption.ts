@@ -4,7 +4,7 @@ import createDebug from 'debug';
 import tweetnacl from 'tweetnacl';
 
 import * as chacha20poly1305 from './chacha20poly1305';
-import {HAPEncryptionContext} from "../../HAPClient";
+import {HAPEncryptionContext} from "../../types/hap-proxy";
 
 const debug = createDebug('encryption');
 

@@ -1,9 +1,10 @@
-import {HAPEncryptionContext, HAPStates, HAPStatusCode, PairMethods, TLVErrors, TLVValues} from "./HAPClient";
+import {HAPEncryptionContext, HAPStates, HAPStatusCode, PairMethods, TLVErrors, TLVValues} from "./types/hap-proxy";
 import net, {AddressInfo, Server, Socket} from "net";
 import createDebug from 'debug';
 import * as encryption from "./lib/crypto/encryption";
 import {
     HTTPContentType,
+    HTTPMethod,
     HTTPRequest,
     HTTPRequestParser,
     HTTPRoutes,
@@ -18,6 +19,8 @@ import * as hkdf from './lib/crypto/hkdf';
 import tweetnacl from 'tweetnacl';
 import {Advertiser} from "./lib/Advertiser";
 import {AccessoryInfo, PairingInformation, PermissionTypes} from "./lib/storage/AccessoryInfo";
+import {once} from "./lib/utils/once";
+import * as url from "url";
 
 const debug = createDebug("HAPServer");
 const debugCon = createDebug("HAPProxy");
@@ -48,46 +51,23 @@ export type ServerPairVerifySession = {
     sessionKey: Buffer,
 }
 
-export enum HAPAccessoryCategory {
-    // noinspection JSUnusedGlobalSymbols
-    OTHER = 1,
-    BRIDGE = 2,
-    FAN = 3,
-    GARAGE_DOOR_OPENER = 4,
-    LIGHTBULB = 5,
-    DOOR_LOCK = 6,
-    OUTLET = 7,
-    SWITCH = 8,
-    THERMOSTAT = 9,
-    SENSOR = 10,
-    ALARM_SYSTEM = 11,
-    SECURITY_SYSTEM = 11, //Added to conform to HAP naming
-    DOOR = 12,
-    WINDOW = 13,
-    WINDOW_COVERING = 14,
-    PROGRAMMABLE_SWITCH = 15,
-    RANGE_EXTENDER = 16,
-    CAMERA = 17,
-    IP_CAMERA = 17, //Added to conform to HAP naming
-    VIDEO_DOORBELL = 18,
-    AIR_PURIFIER = 19,
-    AIR_HEATER = 20, //Not in HAP Spec
-    AIR_CONDITIONER = 21, //Not in HAP Spec
-    AIR_HUMIDIFIER = 22, //Not in HAP Spec
-    AIR_DEHUMIDIFIER = 23, // Not in HAP Spec
-    APPLE_TV = 24,
-    HOMEPOD = 25, // HomePod
-    SPEAKER = 26,
-    AIRPORT = 27,
-    SPRINKLER = 28,
-    FAUCET = 29,
-    SHOWER_HEAD = 30,
-    TELEVISION = 31,
-    TARGET_CONTROLLER = 32, // Remote Control
-    ROUTER = 33 // HomeKit enabled router
+export enum HAPServerEvents {
+    ACCESSORIES = "accessories",
+    GET_CHARACTERISTICS = "get-characteristics",
+    SET_CHARACTERISTICS = "set-characteristics",
+    PREPARE_WRITE = "prepare",
+    RESOURCE = "resource",
 }
 
-export class HAPServer {
+export type HAPServerEventMap = {
+    [HAPServerEvents.ACCESSORIES]: (connection: HAPServerConnection, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
+    [HAPServerEvents.GET_CHARACTERISTICS]: (connection: HAPServerConnection, ids: string, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
+    [HAPServerEvents.SET_CHARACTERISTICS]: (connection: HAPServerConnection, writeRequest: Buffer, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
+    [HAPServerEvents.PREPARE_WRITE]: (connection: HAPServerConnection, prepareRequest: Buffer, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
+    [HAPServerEvents.RESOURCE]: (connection: HAPServerConnection, resourceRequest: Buffer, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
+}
+
+export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
     private accessoryInfo: AccessoryInfo;
 
@@ -101,15 +81,16 @@ export class HAPServer {
         [HTTPRoutes.PAIR_SETUP]: this.handlePair.bind(this),
         [HTTPRoutes.PAIR_VERIFY]: this.handlePairVerify.bind(this),
         [HTTPRoutes.PAIRINGS]: this.handlePairings.bind(this),
-        [HTTPRoutes.ACCESSORIES]: NOT_FOUND_HANDLER,
-        [HTTPRoutes.CHARACTERISTICS]: NOT_FOUND_HANDLER,
-        [HTTPRoutes.PREPARE]: NOT_FOUND_HANDLER,
-        [HTTPRoutes.RESOURCE]: NOT_FOUND_HANDLER,
+        [HTTPRoutes.ACCESSORIES]: this.handleAccessories.bind(this),
+        [HTTPRoutes.CHARACTERISTICS]: this.handleCharacteristics.bind(this),
+        [HTTPRoutes.PREPARE]: this.handlePrepare.bind(this),
+        [HTTPRoutes.RESOURCE]: this.handleResource.bind(this),
     };
 
     private currentPairSetupSession?: Partial<ServerPairSetupSession>;
 
     constructor(accessoryInfo: AccessoryInfo) {
+        super();
         this.accessoryInfo = accessoryInfo;
 
         this.tcpServer = net.createServer();
@@ -163,7 +144,7 @@ export class HAPServer {
 
     // noinspection JSMethodCanBeStatic
     private handleIdentify(connection: HAPServerConnection, request: HTTPRequest): Promise<HTTPServerResponse> {
-        if (this.accessoryInfo.hasPairings()) {
+        if (this.accessoryInfo.hasPairings()) { // if we are paired, a client cannot make an unpaired identify
             return Promise.resolve({
                 status: 470, // TODO status
                 contentType: HTTPContentType.HAP_JSON,
@@ -172,6 +153,7 @@ export class HAPServer {
         }
 
         debug("**Unpaired Identify received**");
+        // TODO we could potentially forward this but is this really necessary?
 
         return Promise.resolve({
             status: 204,
@@ -717,20 +699,136 @@ export class HAPServer {
     }
 
     private handleAccessories(connection: HAPServerConnection, request: HTTPRequest): Promise<HTTPServerResponse> {
-        // TODO implement
-        return NOT_FOUND_HANDLER(connection, request);
+        if (!connection.pairingVerified) {
+            return Promise.resolve({
+                status: 470, // TODO status
+                contentType: HTTPContentType.HAP_JSON,
+                data: Buffer.from(JSON.stringify({ status: HAPStatusCode.INSUFFICIENT_PRIVILEGES })),
+            });
+        }
+
+        if (this.listenerCount(HAPServerEvents.ACCESSORIES) === 0) {
+            return NOT_FOUND_HANDLER(connection, request); // TODO adjust response
+        }
+
+        return new Promise((resolve, reject) => {
+            this.emit(HAPServerEvents.ACCESSORIES, connection, once((error: Error, response: HTTPServerResponse) => {
+                if (error || !response) {
+                    reject(error || new Error("Response was undefined!"));
+                } else {
+                    resolve(response);
+                }
+            }));
+        });
     }
 
     private handleCharacteristics(connection: HAPServerConnection, request: HTTPRequest): Promise<HTTPServerResponse> {
-        return NOT_FOUND_HANDLER(connection, request);
+        if (!connection.pairingVerified) {
+            return Promise.resolve({
+                status: 470, // TODO status
+                contentType: HTTPContentType.HAP_JSON,
+                data: Buffer.from(JSON.stringify({ status: HAPStatusCode.INSUFFICIENT_PRIVILEGES })),
+            });
+        }
+
+        if (request.method === HTTPMethod.GET) {
+            if (this.listenerCount(HAPServerEvents.GET_CHARACTERISTICS) === 0) {
+                return NOT_FOUND_HANDLER(connection, request); // TODO adjust response
+            }
+
+            const query = url.parse(request.uri, true).query;
+            if (!query || !query.id) {
+                // TODO return appropriate error
+                return Promise.reject();
+            }
+
+            const idsString = query.id;
+
+            return new Promise<HTTPServerResponse>((resolve, reject) => {
+               this.emit(HAPServerEvents.GET_CHARACTERISTICS, connection, idsString, once((error: Error, response: HTTPServerResponse) => {
+                  if (error || !response) {
+                      reject(error || new Error("Response was undefined!"));
+                  } else {
+                      resolve(response);
+                  }
+               }));
+            });
+        } else if (request.method === HTTPMethod.PUT) {
+            if (this.listenerCount(HAPServerEvents.SET_CHARACTERISTICS) === 0) {
+                return NOT_FOUND_HANDLER(connection, request); // TODO adjust response
+            }
+
+            return new Promise<HTTPServerResponse>((resolve, reject) => {
+                this.emit(HAPServerEvents.SET_CHARACTERISTICS, connection, request.body, once((error: Error, response: HTTPServerResponse) => {
+                    if (error || !response) {
+                        reject(error || new Error("Response was undefined!"));
+                    } else {
+                        resolve(response);
+                    }
+                }));
+            })
+        } else {
+            return Promise.reject();
+            // TODO return appropriate error
+        }
     }
 
     private handlePrepare(connection: HAPServerConnection, request: HTTPRequest): Promise<HTTPServerResponse> {
-        return NOT_FOUND_HANDLER(connection, request);
+        if (!connection.pairingVerified) {
+            return Promise.resolve({
+                status: 470, // TODO status
+                contentType: HTTPContentType.HAP_JSON,
+                data: Buffer.from(JSON.stringify({ status: HAPStatusCode.INSUFFICIENT_PRIVILEGES })),
+            });
+        }
+
+        if (request.method == HTTPMethod.PUT) {
+            if (this.listenerCount(HAPServerEvents.PREPARE_WRITE) === 0) {
+                return NOT_FOUND_HANDLER(connection, request); // TODO adjust response
+            }
+
+            return new Promise<HTTPServerResponse>((resolve, reject) => {
+               this.emit(HAPServerEvents.PREPARE_WRITE, connection, request.body, ((error: Error, response: HTTPServerResponse) => {
+                   if (error || !response) {
+                       reject(error || new Error("Response was undefined!"));
+                   } else {
+                       resolve(response);
+                   }
+               }));
+            });
+        } else {
+            // TODO return appropriate error
+            return Promise.reject();
+        }
     }
 
     private handleResource(connection: HAPServerConnection, request: HTTPRequest): Promise<HTTPServerResponse> {
-        return NOT_FOUND_HANDLER(connection, request);
+        if (!connection.pairingVerified) {
+            return Promise.resolve({
+                status: 470, // TODO status
+                contentType: HTTPContentType.HAP_JSON,
+                data: Buffer.from(JSON.stringify({ status: HAPStatusCode.INSUFFICIENT_PRIVILEGES })),
+            });
+        }
+
+        if (request.method == HTTPMethod.POST) {
+            if (this.listenerCount(HAPServerEvents.RESOURCE) === 0) {
+                return NOT_FOUND_HANDLER(connection, request); // TODO adjust response
+            }
+
+            return new Promise<HTTPServerResponse>((resolve, reject) => {
+                this.emit(HAPServerEvents.RESOURCE, connection, request.body, ((error: Error, response: HTTPServerResponse) => {
+                    if (error || !response) {
+                        reject(error || new Error("Response was undefined!"));
+                    } else {
+                        resolve(response);
+                    }
+                }));
+            });
+        } else {
+            // TODO return appropriate error
+            return Promise.reject();
+        }
     }
 
 }
@@ -770,7 +868,8 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
     clientId?: string;
     pairingVerified: boolean = false;
 
-    private pendingEventData: Buffer = Buffer.alloc(0);
+    private haltEvents: boolean = false;
+    private eventQueue: Buffer[] = []; // queue of unencrypted events
 
     private httpWorkingQueue: Promise<any> = Promise.resolve();
 
@@ -791,6 +890,8 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
     }
 
     private handleData(data: Buffer) {
+        this.haltEvents = true;
+
         if (this.encryptionContext) {
             data = encryption.layerDecrypt(data, this.encryptionContext); // TODO handle exception
         }
@@ -826,7 +927,7 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
     private sendResponse(response: HTTPServerResponse) {
         // TODO check if we are still connected
 
-        console.log("Sending http response");
+        console.log("Sending http response"); // TODO remove
         console.log(response);
 
         const data = response.data || Buffer.alloc(0);
@@ -843,7 +944,7 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
                 }, "") +
                 `\r\n` // additional newline before content
             ),
-            data
+            data,
         ]);
 
         // with 'this.encryptionContext.decryptionNonce > 0' we ensure that we do not encrypt the
@@ -853,18 +954,50 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
         }
 
         this.socket.write(responseBuf);
-        /*
-        return new Promise<HTTPResponse>(resolve => {
-            this.httpRequestResolver = resolve;
-            this.socket.write(response);
-        });
-         */
-        /*
-        if (this.httpRequestResolver) {
-            console.error("WARNING: http request still in progress");
-            return Promise.reject("Request still in progress");
+
+        this.haltEvents = false;
+        this.flushEventQueue();
+    }
+
+    sendRawEvent(data: Buffer) {
+        console.log("Sending EVENT"); // TODO remove debug
+        console.log(data.toString());
+
+        let eventBuf = Buffer.concat([
+            Buffer.from(
+                `EVENT/1.0 200 OK\r\n` +
+                `Content-Type: ${HTTPContentType.HAP_JSON}\r\n` +
+                `Content-Length: ${data.length}\r\n` +
+                `\r\n` // additional newline before content
+            ),
+            data,
+        ]);
+
+        if (this.haltEvents) {
+            this.eventQueue.push(eventBuf);
+        } else {
+            if (this.encryptionContext) {
+                eventBuf = encryption.layerEncrypt(eventBuf, this.encryptionContext);
+            }
+
+            this.socket.write(eventBuf);
         }
-         */
+    }
+
+    flushEventQueue() {
+        if (this.eventQueue.length > 0) {
+            debug("Flushing event queue");
+
+            this.eventQueue.forEach(eventBuf => {
+                if (this.encryptionContext) {
+                    eventBuf = encryption.layerEncrypt(eventBuf, this.encryptionContext);
+                }
+
+                this.socket.write(eventBuf);
+            });
+
+            this.eventQueue = [];
+        }
     }
 
     private handleClose() {
@@ -874,6 +1007,8 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
     }
 
     private handleError(error: Error) {
+        console.log("Server client socket error:");
+        console.log(error.stack);
         // TODO debug
     }
 

@@ -9,11 +9,14 @@ import tweetnacl from 'tweetnacl';
 import srp from 'fast-srp-hap';
 import {HTTPContentType, HTTPMethod, HTTPResponse, HTTPResponseParser, HTTPRoutes} from "./lib/http-protocol";
 import {ClientInfo} from "./lib/storage/ClientInfo";
+import {EventEmitter} from "./lib/EventEmitter";
+import {HAPEncryptionContext, HAPStates, PairMethods, TLVErrors, TLVValues} from "./types/hap-proxy";
 
 const debug = createDebug("HAPClient");
 const debugCon = createDebug("HAPClient:Connection");
 
 export type PinProvider = (callback: (pinCode: string) => void) => void;
+export type ResponseHandler = (response: HTTPResponse) => void;
 
 export interface Characteristic {
     aid: number,
@@ -30,7 +33,39 @@ export interface CharacteristicsSetRequest extends Characteristic {
     r?: string, // write response
 }
 
-export class HAPClient {
+export interface CharacteristicsEventRequest extends Characteristic {
+    ev: boolean,
+}
+
+export interface CharacteristicsEventResponse extends Characteristic {
+    value: any,
+}
+
+export type ClientPairSetupSession = {
+    pinProvider: PinProvider,
+    srpClient: srp.Client,
+    sessionKey: Buffer,
+}
+
+export type PairVerifySession = {
+
+    // Curve25519KeyPair (M1)
+    secretKey: Buffer;
+    publicKey: Buffer;
+
+    // M2
+    sharedSecret: Buffer;
+}
+
+export enum HAPClientEvents {
+    EVENT_RAW = "event-raw",
+}
+
+export type HAPClientEventMap = {
+    [HAPClientEvents.EVENT_RAW]: (eventBuf: Buffer) => void;
+}
+
+export class HAPClient extends EventEmitter<HAPClientEventMap> {
 
     clientInfo: ClientInfo;
 
@@ -39,6 +74,9 @@ export class HAPClient {
     private readonly pinProvider: PinProvider;
 
     connection: HAPClientConnection;
+    private pairSetupSession?: Partial<ClientPairSetupSession>;
+    private pairVerifySession?: Partial<PairVerifySession>;
+    private pairingVerified = false;
 
     private currentChain: Promise<any> = Promise.resolve();
 
@@ -51,12 +89,15 @@ export class HAPClient {
     }
 
     private constructor(clientInfo: ClientInfo, host: string, port: number, pinProvider: PinProvider) {
+        super();
         this.clientInfo = clientInfo;
         this.host = host;
         this.port = port;
         this.pinProvider = pinProvider;
 
         this.connection = new HAPClientConnection(this);
+        this.connection.on(HAPClientConnectionEvents.EVENT_RAW, this.handleEvents.bind(this));
+        this.connection.on(HAPClientConnectionEvents.DISCONNECTED, this.handleDisconnected.bind(this));
     }
 
     accessories(): Promise<HTTPResponse> {
@@ -106,7 +147,17 @@ export class HAPClient {
             .then(() => this.connection.put(HTTPRoutes.CHARACTERISTICS, body));
     }
 
-    // TODO subscribe to events
+    setCharacteristicEvents(characteristics: CharacteristicsEventRequest[], pid?: number) {
+        const request = {
+            characteristics: characteristics,
+            pid: pid,
+        };
+
+        const body = Buffer.from(JSON.stringify(request));
+
+        return this.currentChain = this.ensurePairingVerified()
+            .then(() => this.connection.put(HTTPRoutes.CHARACTERISTICS, body));
+    }
 
     prepareWrite(ttl: number, pid?: number): Promise<number> {
         if (pid === undefined) {
@@ -134,7 +185,7 @@ export class HAPClient {
 
     // TODO addPairing
 
-    // TODO removePairing
+    // TODO listPairings
 
     /**
      * Sends the request to remove a pairing. When clientId is omitted the own pairing will be removed.
@@ -175,192 +226,12 @@ export class HAPClient {
     private ensurePairingVerified() {
         return this.currentChain = this.currentChain
             .then(() => this.connection.ensureConnected())
-            .then(() => this.connection.ensureAuthenticated(this.pinProvider));
+            .then(() => this.ensureAuthenticated());
     }
 
-}
-
-// TODO move
-export enum TLVValues {
-    // noinspection JSUnusedGlobalSymbols
-    METHOD = 0x00,
-    IDENTIFIER = 0x01,
-    SALT = 0x02,
-    PUBLIC_KEY = 0x03,
-    PROOF = 0x04,
-    ENCRYPTED_DATA = 0x05,
-    STATE = 0x06,
-    ERROR = 0x07,
-    RETRY_DELAY = 0x08,
-    CERTIFICATE = 0x09, // x.509 certificate
-    SIGNATURE = 0x0A,  // ed25519
-    PERMISSIONS = 0x0B, // None (0x00): regular user, 0x01: Admin (able to add/remove/list pairings)
-    FRAGMENT_DATA = 0x0C,
-    FRAGMENT_LAST = 0x0D,
-    PAIRING_FLAGS = 0x13, // pairing flags
-    SEPARATOR = 0x0FF // Zero-length TLV that separates different TLVs in a list.
-}
-
-// TODO move
-// noinspection JSUnusedGlobalSymbols
-export enum PairingFlags {
-    // noinspection JSUnusedGlobalSymbols
-    TRANSIENT_PAIR_SETUP = 0x10,
-    SPLIT_PAIR_SETUP = 0x1000000,
-}
-
-// TODO move
-export enum PairMethods {
-    // noinspection JSUnusedGlobalSymbols
-    PAIR_SETUP = 0x00,
-    PAIR_SETUP_WITH_AUTH = 0x01,
-    PAIR_VERIFY = 0x02,
-    ADD_PAIRING = 0x03,
-    REMOVE_PAIRING = 0x04,
-    LIST_PAIRINGS = 0x05
-}
-
-// TODO move
-export enum HAPStates {
-    M1 = 0x01,
-    M2 = 0x02,
-    M3 = 0x03,
-    M4 = 0x04,
-    M5 = 0x05,
-    M6 = 0x06
-}
-
-// TODO move
-// Error codes and the like, guessed by packet inspection
-export enum TLVErrors {
-    // noinspection JSUnusedGlobalSymbols
-    UNKNOWN = 0x01,
-    INVALID_REQUEST = 0x02,
-    AUTHENTICATION = 0x02, // setup code or signature verification failed
-    BACKOFF = 0x03, // // client must look at retry delay tlv item
-    MAX_PEERS = 0x04, // server cannot accept any more pairings
-    MAX_TRIES = 0x05, // server reached maximum number of authentication attempts
-    UNAVAILABLE = 0x06, // server pairing method is unavailable
-    BUSY = 0x07 // cannot accept pairing request at this time
-}
-
-// TODO move
-// noinspection JSUnusedGlobalSymbols
-export enum HAPStatusCode {
-    // noinspection JSUnusedGlobalSymbols
-    SUCCESS = 0,
-    INSUFFICIENT_PRIVILEGES = -70401,
-    SERVICE_COMMUNICATION_FAILURE = -70402,
-    RESOURCE_BUSY = -70403,
-    READ_ONLY_CHARACTERISTIC = -70404,
-    WRITE_ONLY_CHARACTERISTIC = -70405,
-    NOTIFICATION_NOT_SUPPORTED = -70406,
-    OUT_OF_RESOURCE = -70407,
-    OPERATION_TIMED_OUT = -70408,
-    RESOURCE_DOES_NOT_EXIST = -70409,
-    INVALID_VALUE_IN_REQUEST = -70410,
-    INSUFFICIENT_AUTHORIZATION = -70411
-}
-
-export type ClientPairSetupSession = {
-    pinProvider: PinProvider,
-    srpClient: srp.Client,
-    sessionKey: Buffer,
-}
-
-export type PairVerifySession = {
-
-    // Curve25519KeyPair (M1)
-    secretKey: Buffer;
-    publicKey: Buffer;
-
-    // M2
-    sharedSecret: Buffer;
-}
-
-export type ResponseHandler = (response: HTTPResponse) => void;
-
-export class HAPEncryptionContext {
-
-    sharedSecret: Buffer;
-
-    encryptionKey: Buffer;
-    encryptionNonce: number = 0;
-    decryptionKey: Buffer;
-    decryptionNonce: number = 0;
-    frameBuffer?: Buffer; // used to store incomplete frames
-
-    constructor(sharedSecret: Buffer, encryptionKey: Buffer, decryptionKey: Buffer) {
-        this.sharedSecret = sharedSecret;
-        this.encryptionKey = encryptionKey;
-        this.decryptionKey = decryptionKey;
-    }
-
-}
-
-export class HAPClientConnection {
-
-    private socket?: Socket;
-    private parser: HTTPResponseParser;
-
-    private readonly clientInfo: ClientInfo;
-    private readonly host: string;
-    private readonly port: number;
-
-    private encryptionContext?: HAPEncryptionContext;
-
-    private pairSetupSession?: Partial<ClientPairSetupSession>;
-    private pairVerifySession?: Partial<PairVerifySession>;
-
-    private httpRequestResolver?: (value?: HTTPResponse | PromiseLike<HTTPResponse>) => void;
-
-    private pairingVerified = false;
-
-    constructor(hapClient: HAPClient) {
-        this.parser = new HTTPResponseParser();
-
-        this.clientInfo = hapClient.clientInfo;
-        this.host = hapClient.host;
-        this.port = hapClient.port;
-    }
-
-    ensureConnected(): Promise<void> {
-        if (this.socket) {
-            return Promise.resolve();
-        }
-
-        debugCon("Opening socket...");
-        this.socket = net.createConnection(this.port, this.host);
-        this.socket.on('data', this.handleIncomingData.bind(this));
-
-        const promise = new Promise<void>(resolve => {
-            this.socket!.on('connect', () => {
-                debugCon("Successfully connected!");
-                resolve();
-            });
-        });
-
-        this.socket.setKeepAlive(true);
-        this.socket.setNoDelay(true);
-
-        return promise;
-    }
-
-    ensureAuthenticated(pinProvider: PinProvider): Promise<void> {
-        return this.checkPaired(pinProvider)
+    private ensureAuthenticated(): Promise<void> {
+        return this.checkPaired(this.pinProvider)
             .then(this.pairVerify.bind(this));
-    }
-
-    private disconnect() {
-        this.pairVerifySession = undefined;
-        this.pairSetupSession = undefined;
-        this.pairingVerified = false;
-        if (this.socket) {
-            this.socket.destroy();
-            this.socket = undefined;
-        }
-
-        debugCon("Disconnected!");
     }
 
     private checkPaired(pin: PinProvider): Promise<void> {
@@ -382,7 +253,6 @@ export class HAPClientConnection {
         return this.sendPairVerifyM1();
     }
 
-    // TODO move pairing stuff up to the client not to the connection level
     private sendPairM1(): Promise<void> {
         debugCon("Sending pair setup M1");
 
@@ -391,7 +261,7 @@ export class HAPClientConnection {
             TLVValues.METHOD, PairMethods.PAIR_SETUP,
         );
 
-        return this.sendPairRequest(HTTPRoutes.PAIR_SETUP, startRequest)
+        return this.connection.sendPairRequest(HTTPRoutes.PAIR_SETUP, startRequest)
             .then(this.handlePairM2.bind(this));
     }
 
@@ -404,7 +274,7 @@ export class HAPClientConnection {
 
         if (objects[TLVValues.ERROR]) {
             debugCon("M2: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("M2: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
         }
 
@@ -433,7 +303,7 @@ export class HAPClientConnection {
                         TLVValues.PROOF, M1,
                     );
 
-                    this.sendPairRequest(HTTPRoutes.PAIR_SETUP, verifyRequest)
+                    this.connection.sendPairRequest(HTTPRoutes.PAIR_SETUP, verifyRequest)
                         .then(this.handlePairM4.bind(this))
                         .then(resolve);
                 });
@@ -450,7 +320,7 @@ export class HAPClientConnection {
 
         if (objects[TLVValues.ERROR]) {
             debugCon("M4: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("M4: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
         }
 
@@ -464,7 +334,7 @@ export class HAPClientConnection {
             srpClient.checkM2(serverProof);
         } catch (error) {
             debugCon("ERROR: srp serverProof could not be verified: " + error.message);
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("ERROR: srp serverProof could not be verified: " + error.message);
         }
 
@@ -521,7 +391,7 @@ export class HAPClientConnection {
             TLVValues.ENCRYPTED_DATA, Buffer.concat([encryptedData, authTag]),
         );
 
-        return this.sendPairRequest(HTTPRoutes.PAIR_SETUP, exchangeRequest)
+        return this.connection.sendPairRequest(HTTPRoutes.PAIR_SETUP, exchangeRequest)
             .then(this.handlePairM6.bind(this));
     }
 
@@ -535,7 +405,7 @@ export class HAPClientConnection {
 
         if (objects[TLVValues.ERROR]) {
             debugCon("M6: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("M6: received error code " + TLVErrors[objects[TLVValues.ERROR][0]]);
         }
 
@@ -548,7 +418,7 @@ export class HAPClientConnection {
         const plaintextBuffer = Buffer.alloc(encryptedData.length);
         if (!encryption.verifyAndDecrypt(session.sessionKey!, nonce, encryptedData, authTag, null, plaintextBuffer)) {
             debugCon("M6: Could not verify and decrypt!");
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("M6: Could not verify and decrypt!");
         }
 
@@ -569,7 +439,7 @@ export class HAPClientConnection {
         ]);
         if (!tweetnacl.sign.detached.verify(accessoryInfo, accessorySignature, accessoryLTPK)) {
             debugCon("M6: Could not verify accessory signature!");
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("Could not verify accessory signature!");
         }
 
@@ -601,7 +471,7 @@ export class HAPClientConnection {
             TLVValues.PUBLIC_KEY, publicKey
         );
 
-        return this.sendPairRequest(HTTPRoutes.PAIR_VERIFY, startRequest)
+        return this.connection.sendPairRequest(HTTPRoutes.PAIR_VERIFY, startRequest)
             .then(this.handlePairVerifyM2.bind(this));
     }
 
@@ -618,7 +488,7 @@ export class HAPClientConnection {
 
         if (error) {
             debugCon("Pair-Verify M2 returned with error: " + TLVErrors[error[0]]);
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("Pair-Verify M2 returned with error: " + TLVErrors[error[0]]);
         }
 
@@ -646,7 +516,7 @@ export class HAPClientConnection {
         const nonce = Buffer.from("PV-Msg02");
         if (!encryption.verifyAndDecrypt(sessionKey, nonce, cipherText, authTag, null, plaintext)) {
             console.error("WARNING: M2 - Could not verify cipherText");
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("WARNING: M2 - Could not verify cipherText");
         }
 
@@ -659,7 +529,7 @@ export class HAPClientConnection {
         // We do however only support one pairing, thus check if ids match
         if (this.clientInfo.accessoryIdentifier !== accessoryIdentifier.toString()) {
             console.error("WARNING: identifier is not the expected store in the keystore");
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("WARNING: identifier is not the expected store in the keystore");
         }
 
@@ -672,7 +542,7 @@ export class HAPClientConnection {
 
         if (!tweetnacl.sign.detached.verify(accessoryInfo, accessorySignature, this.clientInfo.accessoryLTPK)) {
             debugCon("M2: Failed in pair-verify to verify accessory signature!");
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("M2: Failed in pair-verify to verify accessory signature!");
         }
 
@@ -712,7 +582,7 @@ export class HAPClientConnection {
         );
 
         // Step 12
-        return this.sendPairRequest(HTTPRoutes.PAIR_VERIFY, finishRequest)
+        return this.connection.sendPairRequest(HTTPRoutes.PAIR_VERIFY, finishRequest)
             .then(this.handlePairVerifyM4.bind(this));
     }
 
@@ -728,31 +598,117 @@ export class HAPClientConnection {
         const session = this.pairVerifySession!;
         const sharedSecret = session.sharedSecret!;
 
-        // generate HAP encryption/decryption keys
-        // TODO no need to generate keys if verification has failed (lol)
-        const salt = Buffer.from("Control-Salt");
-        const accessoryToControllerInfo = Buffer.from("Control-Read-Encryption-Key");
-        const controllerToAccessoryInfo = Buffer.from("Control-Write-Encryption-Key");
-
-        const accessoryToControllerKey = hkdf.HKDF("sha512", salt, sharedSecret, accessoryToControllerInfo, 32);
-        const controllerToAccessoryKey = hkdf.HKDF("sha512", salt, sharedSecret, controllerToAccessoryInfo, 32);
-
-        this.encryptionContext = new HAPEncryptionContext(sharedSecret, controllerToAccessoryKey, accessoryToControllerKey);
-
         this.pairVerifySession = undefined;
         if (error) {
             debugCon("Pair-Verify was unsuccessful: " + TLVErrors[error[0]]);
-            this.disconnect();
+            this.connection.disconnect();
             return Promise.reject("pair-verify was unsuccessful: " + TLVErrors[error[0]]);
         } else {
-            debugCon("Pair-Verify was successful");
+            // generate HAP encryption/decryption keys
+            const salt = Buffer.from("Control-Salt");
+            const accessoryToControllerInfo = Buffer.from("Control-Read-Encryption-Key");
+            const controllerToAccessoryInfo = Buffer.from("Control-Write-Encryption-Key");
+
+            const accessoryToControllerKey = hkdf.HKDF("sha512", salt, sharedSecret, accessoryToControllerInfo, 32);
+            const controllerToAccessoryKey = hkdf.HKDF("sha512", salt, sharedSecret, controllerToAccessoryInfo, 32);
+
+            this.connection.encryptionContext = new HAPEncryptionContext(sharedSecret, controllerToAccessoryKey, accessoryToControllerKey);
             this.pairingVerified = true;
+
+            debugCon("Pair-Verify was successful");
 
             return Promise.resolve();
         }
     }
 
-    handleIncomingData(data: Buffer) {
+    private handleEvents(eventBuf: Buffer) {
+        this.emit(HAPClientEvents.EVENT_RAW, eventBuf);
+    }
+
+    private handleDisconnected() {
+        this.pairVerifySession = undefined;
+        this.pairSetupSession = undefined;
+        this.pairingVerified = false;
+    }
+
+}
+
+export enum HAPClientConnectionEvents {
+    EVENT_RAW = "event-raw",
+    DISCONNECTED = "disconnected",
+}
+
+export type HAPClientConnectionEventMap = {
+    [HAPClientConnectionEvents.EVENT_RAW]: (eventBuf: Buffer) => void;
+    [HAPClientConnectionEvents.DISCONNECTED]: () => void;
+}
+
+export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMap> {
+
+    private socket?: Socket;
+    private parser: HTTPResponseParser;
+
+    private readonly clientInfo: ClientInfo;
+    private readonly host: string;
+    private readonly port: number;
+
+    encryptionContext?: HAPEncryptionContext;
+
+    private httpRequestResolver?: (value?: HTTPResponse | PromiseLike<HTTPResponse>) => void;
+
+    constructor(hapClient: HAPClient) {
+        super();
+        this.parser = new HTTPResponseParser();
+
+        this.clientInfo = hapClient.clientInfo;
+        this.host = hapClient.host;
+        this.port = hapClient.port;
+    }
+
+    ensureConnected(): Promise<void> {
+        if (this.socket) {
+            return Promise.resolve();
+        }
+
+        debugCon("Opening socket...");
+        this.socket = net.createConnection(this.port, this.host);
+        this.socket.on('close', this.handleClosed.bind(this));
+        this.socket.on('data', this.handleIncomingData.bind(this));
+
+        const promise = new Promise<void>(resolve => {
+            this.socket!.on('connect', () => {
+                debugCon("Successfully connected!");
+                resolve();
+            });
+        });
+
+        this.socket.setKeepAlive(true);
+        this.socket.setNoDelay(true);
+
+        return promise;
+    }
+
+    disconnect() {
+        if (this.socket) {
+            this.socket.end();
+            // TODO mark destroyed
+            // TODO do not handle incomming data
+        }
+    }
+
+    private handleClosed() {
+        this.socket = undefined;
+        this.encryptionContext = undefined;
+        this.httpRequestResolver = undefined;
+
+        this.parser = new HTTPResponseParser(); // ensure parser buffer is cleared up
+
+        debugCon("Disconnected!"); // TODO debug
+
+        this.emit(HAPClientConnectionEvents.DISCONNECTED);
+    }
+
+    private handleIncomingData(data: Buffer) {
         if (this.encryptionContext) {
             data = encryption.layerDecrypt(data, this.encryptionContext); // TODO handle exception
         }
@@ -765,6 +721,7 @@ export class HAPClientConnection {
             if (message.messageType === "EVENT") {
                 console.log("RECEIVED EVENT");
                 console.log(message);
+                this.emit(HAPClientConnectionEvents.EVENT_RAW, message.body);
             } else if (message.messageType === "HTTP") {
                 if (this.httpRequestResolver) {
                     const resolve = this.httpRequestResolver;

@@ -58,7 +58,7 @@ export enum TLVErrors {
 }
 
 // noinspection JSUnusedGlobalSymbols
-export enum HAPStatusCode {
+export enum HAPStatusCode { // body includes it if http status code is 4xx or 5xx
     // noinspection JSUnusedGlobalSymbols
     SUCCESS = 0,
     INSUFFICIENT_PRIVILEGES = -70401,
@@ -155,13 +155,17 @@ export interface AttributeDatabase {
     accessories: AccessoryAttributeDatabase[],
 }
 
-export interface CharacteristicsSetRequest {
-    characteristics: CharacteristicSetRequest[],
+export interface CharacteristicsWriteRequest {
+    characteristics: CharacteristicWriteRequest[],
     pid?: number,
 }
 
-export interface CharacteristicsSetResponse {
-    characteristics: CharacteristicSetResponse[],
+export interface CharacteristicsWriteResponse {
+    characteristics: CharacteristicWriteResponse[],
+}
+
+export interface CharacteristicsReadResponse {
+    characteristics: CharacteristicReadResponse[],
 }
 
 
@@ -170,9 +174,13 @@ export interface Characteristic {
     iid: number,
 }
 
-export interface CharacteristicGetRequest extends Characteristic {}
+export interface CharacteristicReadRequest extends Characteristic {}
 
-export interface CharacteristicSetRequest extends Characteristic {
+export interface CharacteristicReadResponse extends Characteristic {
+    value: any,
+}
+
+export interface CharacteristicWriteRequest extends Characteristic {
     value?: any,
     ev?: boolean,
     authData?: string,
@@ -180,10 +188,11 @@ export interface CharacteristicSetRequest extends Characteristic {
     r?: string, // write response
 }
 
-export interface CharacteristicEventRequest extends Characteristic {
-    ev: boolean,
+export interface CharacteristicWriteResponse extends Characteristic {
+    status: number,
+    value?: any, // write response
 }
 
-export interface CharacteristicSetResponse extends Characteristic {
-    value: any,
+export interface CharacteristicEventRequest extends Characteristic {
+    ev: boolean,
 }

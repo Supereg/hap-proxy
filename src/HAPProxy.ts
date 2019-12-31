@@ -1,24 +1,38 @@
 import {HAPClient, HAPClientEvents} from "./HAPClient";
 import {HAPServer, HAPServerConnection, HAPServerEvents, HTTPServerResponseCallback} from "./HAPServer";
-import {HTTPContentType, HTTPResponse, HTTPServerResponse} from "./lib/http-protocol";
+import {HTTPContentType, HTTPResponse, HTTPServerResponse, HTTPStatus} from "./lib/http-protocol";
 import {ParsedUrlQuery} from "querystring";
-import {DataStreamTransportManagementServiceFilter, ProtocolInformationServiceFilter} from "./filters";
+import {ProtocolInformationServiceFilter} from "./filters";
 import {ServiceType} from "./definitions";
-import {AttributeDatabase, CharacteristicsSetRequest, CharacteristicsSetResponse} from "./types/hap-proxy";
+import {
+    AttributeDatabase,
+    CharacteristicsReadResponse,
+    CharacteristicsWriteRequest,
+    CharacteristicsWriteResponse
+} from "./types/hap-proxy";
 import {IdentifierCache} from "./storage/IdentifierCache";
+import assert from "assert";
+import {uuid} from "./utils/uuid";
 
 export abstract class ServiceFilter {
 
-    context: HAPProxy;
+    readonly context: HAPProxy;
+    readonly aid: number; // accessory id the service is associated with
+    readonly iid: number; // instance id of the service an instance of this filter is used for
 
-    abstract serviceType: ServiceType;
-    characteristicsFilters: Record<string, CharacteristicFilterRW<any>> = {}; // some predefined characteristic uuids are defined CharacteristicType
+    // record holding the actual filter instances; indexed by iid (iid of the characteristic)
+    readonly characteristicsFilters: Record<number, CharacteristicFilter<any>> = {};
 
-    public constructor(context: HAPProxy) {
+    /**
+     * Record of filter definitions. Key is the CharacteristicType and value the constructor of the CharacteristicFilter.
+     */
+    abstract characteristicFilterDefinitions: Record<string, CharacteristicFilterConstructor<any>>;
+
+    public constructor(context: HAPProxy, aid: number, iid: number) {
         this.context = context;
+        this.aid = aid;
+        this.iid = iid;
     }
-
-    abstract init(): void; // used to register characteristicsFilters
 
 }
 
@@ -27,17 +41,21 @@ export abstract class ServiceFilter {
  */
 export abstract class CharacteristicFilter<T> {
 
-    context: HAPProxy;
+    readonly context: HAPProxy;
+    readonly parent: ServiceFilter;
+    readonly iid: number; // instance id of the characteristic
 
-    public constructor(context: HAPProxy) {
+    public constructor(context: HAPProxy, parent: ServiceFilter, iid: number) {
         this.context = context;
+        this.parent = parent;
+        this.iid = iid;
     }
 
-    abstract filterRead(connection: HAPServerConnection, readValue: T): T;
+    abstract filterRead(connection: HAPServerConnection, readValue: T): Promise<T>;
 
-    abstract filterWrite(connection: HAPServerConnection, writtenValue: T): T;
+    abstract filterWrite(connection: HAPServerConnection, writtenValue: T): Promise<T>;
 
-    abstract filterWriteResponse(connection: HAPServerConnection, writeResponseValue: T): T;
+    abstract filterWriteResponse(connection: HAPServerConnection, writeResponseValue: T): Promise<T>;
 
 }
 
@@ -46,7 +64,7 @@ export abstract class CharacteristicFilter<T> {
  */
 export abstract class CharacteristicFilterRW<T> extends CharacteristicFilter<T> {
 
-    filterWriteResponse(connection: HAPServerConnection, writeResponseValue: T): T {
+    async filterWriteResponse(connection: HAPServerConnection, writeResponseValue: T): Promise<T> {
         return writeResponseValue;
     }
 
@@ -57,7 +75,7 @@ export abstract class CharacteristicFilterRW<T> extends CharacteristicFilter<T> 
  */
 export abstract class CharacteristicFilterR<T> extends CharacteristicFilterRW<T> {
 
-    filterWrite(connection: HAPServerConnection, writtenValue: T): T {
+    async filterWrite(connection: HAPServerConnection, writtenValue: T): Promise<T> {
         return writtenValue; // its not allowed so just forward it. Client will return an error
     }
 
@@ -68,7 +86,7 @@ export abstract class CharacteristicFilterR<T> extends CharacteristicFilterRW<T>
  */
 export abstract class CharacteristicFilterW<T> extends CharacteristicFilterRW<T> {
 
-    filterRead(connection: HAPServerConnection, readValue: T): T {
+    async filterRead(connection: HAPServerConnection, readValue: T): Promise<T> {
         return readValue;
     }
 
@@ -79,9 +97,35 @@ export abstract class CharacteristicFilterW<T> extends CharacteristicFilterRW<T>
  */
 export abstract class CharacteristicFilterControlPoint<T> extends CharacteristicFilter<T> {
 
-    filterRead(connection: HAPServerConnection, readValue: T): T {
+    async filterRead(connection: HAPServerConnection, readValue: T): Promise<T> {
         return readValue;
     }
+
+}
+
+export interface ServiceFilterConstructor {
+
+    /**
+     * Creates a new instance of a ServiceFilter
+     *
+     * @param context {HAPProxy} - the associated proxy instance
+     * @param aid {number} - accessory id
+     * @param iid {number} - instance id of the service
+     */
+    new(context: HAPProxy, aid: number, iid: number): ServiceFilter;
+
+}
+
+export interface CharacteristicFilterConstructor<T> {
+
+    /**
+     * Creates a new instance of a CharacteristicFilter
+     *
+     * @param context {HAPProxy} - the associated proxy instance
+     * @param parent {ServiceFilter} - the associated ServiceFilter instance
+     * @param iid {number} - instance id of the characteristic
+     */
+    new(context: HAPProxy, parent: ServiceFilter, iid: number): CharacteristicFilter<T>;
 
 }
 
@@ -98,9 +142,8 @@ export class HAPProxy {
 
     identifierCache: IdentifierCache;
 
-    serviceFilters: Record<string, ServiceFilter> = {}; // some predefined service uuids are defined CharacteristicType
-
-    // TODO identifier cache: map aid.iid to type
+    serviceFilterDefinitions: Record<string, ServiceFilterConstructor> = {}; // indexed by the ServiceType (uuid)
+    private serviceFilters: Record<string, ServiceFilter> = {}; // indexed by "aid.iid" (iid of the service)
 
     constructor(client: HAPClient, server: HAPServer) {
         this.client = client;
@@ -108,8 +151,8 @@ export class HAPProxy {
 
         this.identifierCache = new IdentifierCache(this.client.clientInfo.clientId); // TODO load from disk
 
-        this.addServiceFilter(new ProtocolInformationServiceFilter(this));
-        // TODO this.addServiceFilter(new DataStreamTransportManagementServiceFilter(this));
+        this.addServiceFilter(ServiceType.PROTOCOL_INFORMATION, ProtocolInformationServiceFilter);
+        // TODO this.addServiceFilter(ServiceType.DATA_STREAM_TRANSPORT_MANAGEMENT, DataStreamTransportManagementServiceFilter);
 
         this.server.on(HAPServerEvents.ACCESSORIES, this.handleServerAccessories.bind(this));
         this.server.on(HAPServerEvents.GET_CHARACTERISTICS, this.handleServerGetCharacteristics.bind(this));
@@ -120,17 +163,57 @@ export class HAPProxy {
         this.client.on(HAPClientEvents.EVENT_RAW, this.handleAccessoryEvent.bind(this));
     }
 
-    addServiceFilter(filter: ServiceFilter) {
-        this.serviceFilters[filter.serviceType] = filter;
+    addServiceFilter(serviceType: ServiceType, filterDefinition: ServiceFilterConstructor) {
+        this.serviceFilterDefinitions[serviceType] = filterDefinition;
     }
 
-    private getCharacteristicFilter(serviceType: string, characteristicType: string): CharacteristicFilter<any> | undefined {
-        const serviceFilter = this.serviceFilters[serviceType];
+    private getOrCreateServiceFilter(aid: number, iid: number, type: string): ServiceFilter | undefined {
+        let filterInstance = this.serviceFilters[aid + "." + iid];
+
+        if (!filterInstance) { // check if we have a definition for this service. If we have create a new instance from it.
+            const definition = this.serviceFilterDefinitions[type];
+
+            if (definition) {
+                filterInstance = new definition(this, aid, iid);
+                this.serviceFilters[aid + "." + iid] = filterInstance;
+            } else {
+                return undefined; // no filter for this service type defined
+            }
+        }
+
+        return filterInstance;
+    }
+
+    private getOrCreateCharacteristicFilter(parent: ServiceFilter, iid: number, type: string): CharacteristicFilter<any> | undefined {
+        let filterInstance = parent.characteristicsFilters[iid];
+
+        if (!filterInstance) {
+            const definition = parent.characteristicFilterDefinitions[type];
+
+            if (definition) {
+                filterInstance = new definition(this, parent, iid);
+                parent.characteristicsFilters[iid] = filterInstance;
+            } else {
+                return undefined; // no filter for this characteristic type defined
+            }
+        }
+
+        return filterInstance;
+    }
+
+    private getCharacteristicFilter(aid: number, iid: number): CharacteristicFilter<any> | undefined {
+        // iid passed to this method is the instance id of the characteristic
+
+        const serviceIid = this.identifierCache.lookupServiceIid(aid, iid);
+        // something heavily went wrong if this entry is not in the cache
+        assert(serviceIid !== undefined, "Corrupted identifierCache. iid of service not found");
+
+        const serviceFilter = this.serviceFilters[aid + "." + serviceIid];
         if (!serviceFilter) {
             return undefined;
         }
 
-        return serviceFilter.characteristicsFilters[characteristicType];
+        return serviceFilter.characteristicsFilters[iid];
     }
 
     private handleAccessoryEvent(eventBuf: Buffer) {
@@ -140,108 +223,132 @@ export class HAPProxy {
 
     private handleServerAccessories(connection: HAPServerConnection, callback: HTTPServerResponseCallback) {
         this.client.accessories()
-            .then(response => {
-                // TODO check for errors
+            .then(httpResponse => {
+                if (httpResponse.status !== 200) {
+                    callback(undefined, HAPProxy.responseToServerResponse(httpResponse));
+                    return;
+                }
+
+                let chain = Promise.resolve();
 
                 this.identifierCache.rebuild(); // clear cache before we rebuild it
+                // TODO check if any services got removed and then remove the appropriate service filter
 
-                const attributeDatabase: AttributeDatabase = JSON.parse(response.body.toString());
-                console.log(attributeDatabase); // TODO remove
+                const attributeDatabase: AttributeDatabase = JSON.parse(httpResponse.body.toString());
+                // console.log(attributeDatabase); // TODO remove
 
                 attributeDatabase.accessories.forEach(accessory => {
-                    // TODO support bridged accessories
-                    if (accessory.aid !== 1) { // find primary accessory
-                        return;
-                    }
-
                     accessory.services.forEach(service => {
+                        const serviceType = uuid.toLongForm(service.type);
+                        const serviceFilter = this.getOrCreateServiceFilter(accessory.aid, service.iid, serviceType);
+
                         service.characteristics.forEach(characteristic => {
-                            // TODO support shortened uuids (type)
-                            this.identifierCache.persists(accessory.aid, characteristic.iid, service.type, characteristic.type);
+                            const characteristicType = uuid.toLongForm(characteristic.type);
+                            this.identifierCache.persists(accessory.aid, service.iid, characteristic.iid, serviceType, characteristicType);
+
+                            if (!serviceFilter) {
+                                return;
+                            }
+
+                            const filter = this.getOrCreateCharacteristicFilter(serviceFilter, characteristic.iid, characteristic.type);
 
                             if (characteristic.value) { // only need to filter if we actually return a value
-                                // TODO instantiate new filter object for every occurence of this service type
-                                const filter = this.getCharacteristicFilter(service.type, characteristic.type);
                                 if (filter) {
-                                    console.log("found characteristic filter"); // TODO remove
-
-                                    characteristic.value = filter.filterRead(connection, characteristic.value);
+                                    chain = chain
+                                        .then(() => filter.filterRead(connection, characteristic.value))
+                                        .then(value => characteristic.value = value)
+                                        .catch(reason => console.log("Filter caused error: " + reason)); // TODO adjust message
                                 }
                             }
                         });
                     });
                 });
 
-                response.body = Buffer.from(JSON.stringify(attributeDatabase));
-
-                return this.identifierCache.save() // save newly built cache
-                    .then(() => callback(undefined, HAPProxy.responseToServerResponse(response)));
+                return chain
+                    .then(() => this.identifierCache.save())
+                    .then(() => {
+                        httpResponse.body = Buffer.from(JSON.stringify(attributeDatabase));
+                        callback(undefined, HAPProxy.responseToServerResponse(httpResponse))
+                    });
             })
             .catch(reason => callback(new Error(reason)));
     }
 
     private handleServerGetCharacteristics(connection: HAPServerConnection, ids: ParsedUrlQuery, callback: HTTPServerResponseCallback) {
         this.client.getCharacteristicsRaw(ids)
-            .then(response => {
-                // TODO check for errors
+            .then(httpResponse => {
+                if (httpResponse.status !== 200) {
+                    callback(undefined, HAPProxy.responseToServerResponse(httpResponse));
+                    return;
+                }
+
+                let chain = Promise.resolve();
+
                 let rebuildResponse = false;
-                const getResponse: CharacteristicsSetResponse = JSON.parse(response.body.toString());
-                console.log(getResponse); // TODO remove
+                const response: CharacteristicsReadResponse = JSON.parse(httpResponse.body.toString());
+                // console.log(response); // TODO remove
 
-                getResponse.characteristics.forEach(characteristic => {
-                    const identifiers = this.identifierCache.lookup(characteristic.aid, characteristic.iid);
-                    if (!identifiers) {
-                        console.log("Found uncached identifiers !!!!!"); // TODO remove
-                        return;
-                    }
+                response.characteristics.forEach(characteristic => {
+                    const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
 
-                    const filter = this.getCharacteristicFilter(identifiers.serviceType, identifiers.characteristicType);
                     if (filter) {
                         const previousValue = characteristic.value;
-                        characteristic.value = filter.filterRead(connection, characteristic.value);
 
-                        if (previousValue !== characteristic.value) {
-                            rebuildResponse = true;
-                        }
+                        chain = chain
+                            .then(() => filter.filterRead(connection, previousValue))
+                            .then(value => {
+                                characteristic.value = value;
+
+                                if (previousValue !== value) {
+                                    rebuildResponse = true;
+                                }
+                            })
+                            .catch(reason => console.log("Filter caused error: " + reason)); // TODO adjust message
                     }
                 });
 
-                if (rebuildResponse) {
-                    response.body = Buffer.from(JSON.stringify(getResponse));
-                }
-                callback(undefined, HAPProxy.responseToServerResponse(response));
+                return chain.then(() => {
+                        if (rebuildResponse) {
+                            httpResponse.body = Buffer.from(JSON.stringify(response));
+                        }
+
+                        callback(undefined, HAPProxy.responseToServerResponse(httpResponse));
+                    });
             })
             .catch(reason => callback(new Error(reason)));
     }
 
     private handleServerSetCharacteristics(connection: HAPServerConnection, writeRequest: Buffer, callback: HTTPServerResponseCallback) {
+        let chain = Promise.resolve();
+
         let rebuildRequest = false;
         let containsWriteResponse = false;
 
-        const request: CharacteristicsSetRequest = JSON.parse(writeRequest.toString());
+        const request: CharacteristicsWriteRequest = JSON.parse(writeRequest.toString());
 
         request.characteristics.forEach(characteristic => {
             if (characteristic.value) {
-                const identifiers = this.identifierCache.lookup(characteristic.aid, characteristic.iid);
-                if (!identifiers) {
-                    console.log("Found uncached identifiers !!!!!"); // TODO remove
-                    return;
-                }
+                const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
 
-                const filter = this.getCharacteristicFilter(identifiers.serviceType, identifiers.characteristicType);
                 if (filter) {
                     const previousValue = characteristic.value;
-                    characteristic.value = filter.filterWrite(connection, characteristic.value);
 
-                    if (previousValue !== characteristic.value) {
-                        rebuildRequest = true;
-                    }
+                    chain = chain
+                        .then(() => filter.filterWrite(connection, previousValue))
+                        .then(value => {
+                            characteristic.value = value;
+
+                            if (previousValue !== value) {
+                                rebuildRequest = true;
+                            }
+                        })
+                        .catch(reason => console.log("Filter caused error: " + reason)); // TODO adjust message
                 }
             }
 
             if (characteristic.ev !== undefined) {
                 // TODO track event subscriptions
-                // TODO track disconnection to unsubscribe from events (1:1 matching of connections)
+                //  track disconnection to unsubscribe from events (1:1 matching of connections)
             }
 
             if (characteristic.r) {
@@ -249,17 +356,56 @@ export class HAPProxy {
             }
         });
 
-        if (rebuildRequest) {
-            writeRequest = Buffer.from(JSON.stringify(request));
-        }
+        chain
+            .then(() => {
+                if (rebuildRequest) {
+                    writeRequest = Buffer.from(JSON.stringify(request));
+                }
+            })
+            .then(() => this.client.setCharacteristicsRaw(writeRequest))
+            .then(httpResponse => {
+                let chain = Promise.resolve();
+                let rebuildResponse = false;
 
-        this.client.setCharacteristicsRaw(writeRequest)
-            .then(response => {
                 if (containsWriteResponse) { // only decode response if we actually queried an control point characteristic
-                    // TODO filter write response
+                    if (httpResponse.status === HTTPStatus.MULTI_STATUS) { // prop. some none spec compliant accessory
+                        console.log("WARNING: The accessory returned unexpected http status (" +
+                            HTTPStatus[httpResponse.status] + "/" + httpResponse.status + ") when we where expecting a write response!");
+                        return;
+                    }
+
+                    const response: CharacteristicsWriteResponse = JSON.parse(httpResponse.body.toString());
+
+                    response.characteristics.forEach(characteristic => {
+                        if (characteristic.status !== 0 || characteristic.value === undefined) {
+                            return;
+                        }
+
+                        const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
+                        if (filter) {
+                            const previousValue = characteristic.value;
+
+                            chain = chain
+                                .then(() => filter.filterWriteResponse(connection, previousValue))
+                                .then(value => {
+                                    characteristic.value = value;
+
+                                    if (previousValue !== value) {
+                                        rebuildResponse = true;
+                                    }
+                                })
+                                .catch(reason => console.log("Filter caused error: " + reason)); // TODO adjust message
+                        }
+                    });
+
+                    chain.then(() => {
+                        if (rebuildResponse) {
+                            httpResponse.body = Buffer.from(JSON.stringify(response));
+                        }
+                    });
                 }
 
-                callback(undefined, HAPProxy.responseToServerResponse(response));
+                return chain.then(() => callback(undefined, HAPProxy.responseToServerResponse(httpResponse)));
             })
             .catch(reason => callback(new Error(reason)));
     }

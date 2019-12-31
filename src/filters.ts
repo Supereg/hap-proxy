@@ -1,4 +1,10 @@
-import {CharacteristicFilterControlPoint, CharacteristicFilterR, ServiceFilter} from "./HAPProxy";
+import {
+    CharacteristicFilter,
+    CharacteristicFilterConstructor,
+    CharacteristicFilterControlPoint,
+    CharacteristicFilterR,
+    ServiceFilter
+} from "./HAPProxy";
 import {HAPServerConnection} from "./HAPServer";
 import {CharacteristicType, ServiceType} from "./definitions";
 import * as tlv from './utils/tlv';
@@ -10,7 +16,7 @@ import {DataStreamServer} from "./datastream";
 
 export class ProtocolInformationServiceNameCharacteristicFilter extends CharacteristicFilterR<string> {
 
-    filterRead(connection: HAPServerConnection, readValue: string): string {
+    async filterRead(connection: HAPServerConnection, readValue: string): Promise<string> {
         return this.context.server.accessoryInfo.displayName; // override accessory name with the proxy server name
     }
 
@@ -18,10 +24,8 @@ export class ProtocolInformationServiceNameCharacteristicFilter extends Characte
 
 export class ProtocolInformationServiceFilter extends ServiceFilter {
 
-    serviceType: ServiceType = ServiceType.PROTOCOL_INFORMATION;
-
-    init(): void {
-        this.characteristicsFilters[CharacteristicType.NAME] = new ProtocolInformationServiceNameCharacteristicFilter(this.context);
+    characteristicFilterDefinitions: Record<string, CharacteristicFilterConstructor<any>> = {
+        [CharacteristicType.NAME]: ProtocolInformationServiceNameCharacteristicFilter,
     }
 
 }
@@ -78,12 +82,12 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
 
     private lastSetupDataStreamTransportResponse: string = "";
 
-    filterRead(connection: HAPServerConnection, readValue: string): string {
+    async filterRead(connection: HAPServerConnection, readValue: string): Promise<string> {
         return this.lastSetupDataStreamTransportResponse;
     }
 
     // TODO track access to the DataStreamManagementService
-    filterWrite(connection: HAPServerConnection, writtenValue: string): string {
+    async filterWrite(connection: HAPServerConnection, writtenValue: string): Promise<string> {
         const data = Buffer.from(writtenValue, "base64");
         const objects = tlv.decode(data);
 
@@ -123,7 +127,7 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
         }
     }
 
-    filterWriteResponse(connection: HAPServerConnection, writeResponseValue: string): string {
+    async filterWriteResponse(connection: HAPServerConnection, writeResponseValue: string): Promise<string> {
         return writeResponseValue;
     }
 
@@ -131,7 +135,7 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
 
 export class DataStreamTransportManagementServiceVersionCharacteristic extends CharacteristicFilterR<string> {
 
-    filterRead(connection: HAPServerConnection, readValue: string): string {
+    async filterRead(connection: HAPServerConnection, readValue: string): Promise<string> {
         // TODO check supported version
         return readValue;
     }
@@ -141,11 +145,10 @@ export class DataStreamTransportManagementServiceVersionCharacteristic extends C
 export class DataStreamTransportManagementServiceFilter extends ServiceFilter {
 
     // TODO proxy data stream management traffic
-    serviceType: ServiceType = ServiceType.DATA_STREAM_TRANSPORT_MANAGEMENT;
 
-    init(): void {
-        this.characteristicsFilters[CharacteristicType.SETUP_DATA_STREAM_MANAGEMENT] = new DataStreamTransportManagementServiceSetupDataStreamTransportCharacteristicFilter(this.context);
-        this.characteristicsFilters[CharacteristicType.VERSION] = new DataStreamTransportManagementServiceVersionCharacteristic(this.context);
+    characteristicFilterDefinitions: Record<string, CharacteristicFilterConstructor<any>> = {
+        [CharacteristicType.SETUP_DATA_STREAM_MANAGEMENT]: DataStreamTransportManagementServiceSetupDataStreamTransportCharacteristicFilter,
+        [CharacteristicType.VERSION]: DataStreamTransportManagementServiceVersionCharacteristic,
     }
 
 }

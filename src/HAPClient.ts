@@ -11,7 +11,7 @@ import {HTTPContentType, HTTPMethod, HTTPResponse, HTTPResponseParser, HTTPRoute
 import {ClientInfo} from "./storage/ClientInfo";
 import {EventEmitter} from "./lib/EventEmitter";
 import {
-    CharacteristicEventRequest, CharacteristicGetRequest, CharacteristicSetRequest, CharacteristicsSetRequest,
+    CharacteristicEventRequest, CharacteristicReadRequest, CharacteristicWriteRequest, CharacteristicsWriteRequest,
     HAPEncryptionContext,
     HAPStates,
     PairMethods,
@@ -90,7 +90,7 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
             .then(() => this.connection.get(HTTPRoutes.ACCESSORIES));
     }
 
-    getCharacteristics(characteristics: CharacteristicGetRequest[], event?: boolean, meta?: boolean, perms?: boolean, type?: boolean): Promise<HTTPResponse> {
+    getCharacteristics(characteristics: CharacteristicReadRequest[], event?: boolean, meta?: boolean, perms?: boolean, type?: boolean): Promise<HTTPResponse> {
         const queryParams: Record<string, string> = {};
 
         let id = "";
@@ -124,8 +124,8 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
             .then(() => this.connection.get(HTTPRoutes.CHARACTERISTICS, queryParams));
     }
 
-    setCharacteristics(characteristics: CharacteristicSetRequest[], pid?: number): Promise<HTTPResponse> {
-        const request: CharacteristicsSetRequest = {
+    setCharacteristics(characteristics: CharacteristicWriteRequest[], pid?: number): Promise<HTTPResponse> {
+        const request: CharacteristicsWriteRequest = {
             characteristics: characteristics,
             pid: pid,
         };

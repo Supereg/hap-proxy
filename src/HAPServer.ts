@@ -22,7 +22,7 @@ import {AccessoryInfo, AccessoryInfoEvents, PairingInformation, PermissionTypes}
 import {once} from "./utils/once";
 import * as url from "url";
 import {ParsedUrlQuery} from "querystring";
-import * as uuid from "./utils/uuid";
+import {uuid} from "./utils/uuid";
 
 const debug = createDebug("HAPServer");
 const debugCon = createDebug("HAPProxy");

@@ -1,5 +1,5 @@
-import * as uuid from '../lib/utils/uuid'
-import * as encryption from "../lib/crypto/encryption"
+import * as uuid from '../utils/uuid'
+import * as encryption from "../crypto/encryption"
 import assert from 'assert';
 import createDebug from 'debug';
 

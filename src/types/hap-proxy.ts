@@ -130,3 +130,60 @@ export class HAPEncryptionContext {
     }
 
 }
+
+export interface CharacteristicAttributeDatabase<T> {
+    iid: number,
+    type: string,
+    value: T,
+    perms: string[],
+    format: string,
+    description?: string,
+}
+
+export interface ServiceAttributeDatabase {
+    iid: number,
+    type: string,
+    characteristics: CharacteristicAttributeDatabase<any>[],
+}
+
+export interface AccessoryAttributeDatabase {
+    aid: number,
+    services: ServiceAttributeDatabase[],
+}
+
+export interface AttributeDatabase {
+    accessories: AccessoryAttributeDatabase[],
+}
+
+export interface CharacteristicsSetRequest {
+    characteristics: CharacteristicSetRequest[],
+    pid?: number,
+}
+
+export interface CharacteristicsSetResponse {
+    characteristics: CharacteristicSetResponse[],
+}
+
+
+export interface Characteristic {
+    aid: number,
+    iid: number,
+}
+
+export interface CharacteristicGetRequest extends Characteristic {}
+
+export interface CharacteristicSetRequest extends Characteristic {
+    value?: any,
+    ev?: boolean,
+    authData?: string,
+    remote?: string,
+    r?: string, // write response
+}
+
+export interface CharacteristicEventRequest extends Characteristic {
+    ev: boolean,
+}
+
+export interface CharacteristicSetResponse extends Characteristic {
+    value: any,
+}

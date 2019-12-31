@@ -2,44 +2,29 @@ import net, {Socket} from 'net';
 import createDebug from 'debug';
 import assert from 'assert';
 import crypto from 'crypto';
-import * as tlv from './lib/utils/tlv';
-import * as encryption from './lib/crypto/encryption';
-import * as hkdf from './lib/crypto/hkdf';
+import * as tlv from './utils/tlv';
+import * as encryption from './crypto/encryption';
+import * as hkdf from './crypto/hkdf';
 import tweetnacl from 'tweetnacl';
 import srp from 'fast-srp-hap';
 import {HTTPContentType, HTTPMethod, HTTPResponse, HTTPResponseParser, HTTPRoutes} from "./lib/http-protocol";
-import {ClientInfo} from "./lib/storage/ClientInfo";
+import {ClientInfo} from "./storage/ClientInfo";
 import {EventEmitter} from "./lib/EventEmitter";
-import {HAPEncryptionContext, HAPStates, PairMethods, TLVErrors, TLVValues} from "./types/hap-proxy";
+import {
+    CharacteristicEventRequest, CharacteristicGetRequest, CharacteristicSetRequest, CharacteristicsSetRequest,
+    HAPEncryptionContext,
+    HAPStates,
+    PairMethods,
+    TLVErrors,
+    TLVValues
+} from "./types/hap-proxy";
+import {ParsedUrlQuery} from "querystring";
 
 const debug = createDebug("HAPClient");
 const debugCon = createDebug("HAPClient:Connection");
 
 export type PinProvider = (callback: (pinCode: string) => void) => void;
 export type ResponseHandler = (response: HTTPResponse) => void;
-
-export interface Characteristic {
-    aid: number,
-    iid: number,
-}
-
-export interface CharacteristicsGetRequest extends Characteristic {}
-
-export interface CharacteristicsSetRequest extends Characteristic {
-    value: any,
-    ev?: boolean,
-    authData?: string,
-    remote?: string,
-    r?: string, // write response
-}
-
-export interface CharacteristicsEventRequest extends Characteristic {
-    ev: boolean,
-}
-
-export interface CharacteristicsEventResponse extends Characteristic {
-    value: any,
-}
 
 export type ClientPairSetupSession = {
     pinProvider: PinProvider,
@@ -105,7 +90,7 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
             .then(() => this.connection.get(HTTPRoutes.ACCESSORIES));
     }
 
-    getCharacteristics(characteristics: CharacteristicsGetRequest[], event?: boolean, meta?: boolean, perms?: boolean, type?: boolean): Promise<HTTPResponse> {
+    getCharacteristics(characteristics: CharacteristicGetRequest[], event?: boolean, meta?: boolean, perms?: boolean, type?: boolean): Promise<HTTPResponse> {
         const queryParams: Record<string, string> = {};
 
         let id = "";
@@ -131,32 +116,37 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
             queryParams["type"] = "1";
         }
 
+        return this.getCharacteristicsRaw(queryParams);
+    }
+
+    getCharacteristicsRaw(queryParams: ParsedUrlQuery): Promise<HTTPResponse> {
         return this.currentChain = this.ensurePairingVerified()
             .then(() => this.connection.get(HTTPRoutes.CHARACTERISTICS, queryParams));
     }
 
-    setCharacteristics(characteristics: CharacteristicsSetRequest[], pid?: number): Promise<HTTPResponse> {
-        const request = {
+    setCharacteristics(characteristics: CharacteristicSetRequest[], pid?: number): Promise<HTTPResponse> {
+        const request: CharacteristicsSetRequest = {
             characteristics: characteristics,
             pid: pid,
         };
 
         const body = Buffer.from(JSON.stringify(request));
-
-        return this.currentChain = this.ensurePairingVerified()
-            .then(() => this.connection.put(HTTPRoutes.CHARACTERISTICS, body));
+        return this.setCharacteristicsRaw(body);
     }
 
-    setCharacteristicEvents(characteristics: CharacteristicsEventRequest[], pid?: number) {
+    setCharacteristicEvents(characteristics: CharacteristicEventRequest[], pid?: number) {
         const request = {
             characteristics: characteristics,
             pid: pid,
         };
 
         const body = Buffer.from(JSON.stringify(request));
+        return this.setCharacteristicsRaw(body);
+    }
 
+    setCharacteristicsRaw(writeRequest: Buffer): Promise<HTTPResponse> {
         return this.currentChain = this.ensurePairingVerified()
-            .then(() => this.connection.put(HTTPRoutes.CHARACTERISTICS, body));
+            .then(() => this.connection.put(HTTPRoutes.CHARACTERISTICS, writeRequest));
     }
 
     prepareWrite(ttl: number, pid?: number): Promise<number> {
@@ -179,6 +169,16 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
                     reject(responseStatus.status);
                 }
             }));
+    }
+
+    prepareWriteRaw(prepareRequest: Buffer): Promise<HTTPResponse> {
+        return this.currentChain = this.ensurePairingVerified()
+            .then(() => this.connection.put(HTTPRoutes.PREPARE, prepareRequest));
+    }
+
+    resourceRaw(resourceRequest: Buffer): Promise<HTTPResponse> {
+        return this.currentChain = this.ensurePairingVerified()
+            .then(() => this.connection.post(HTTPRoutes.RESOURCE, resourceRequest));
     }
 
     // TODO /resource
@@ -235,6 +235,8 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
     }
 
     private checkPaired(pin: PinProvider): Promise<void> {
+        // TODO ensure this is only called within the currentChain
+        //  so pair-verify is not sent more than one time per session
         if (this.clientInfo.paired) {
             return Promise.resolve();
         }
@@ -654,6 +656,8 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
 
     encryptionContext?: HAPEncryptionContext;
 
+    private socketClosed: boolean = false;
+
     private httpRequestResolver?: (value?: HTTPResponse | PromiseLike<HTTPResponse>) => void;
 
     constructor(hapClient: HAPClient) {
@@ -691,8 +695,7 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
     disconnect() {
         if (this.socket) {
             this.socket.end();
-            // TODO mark destroyed
-            // TODO do not handle incomming data
+            this.socketClosed = true;
         }
     }
 
@@ -709,8 +712,18 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
     }
 
     private handleIncomingData(data: Buffer) {
+        if (this.socketClosed) {
+            return;
+        }
+
         if (this.encryptionContext) {
-            data = encryption.layerDecrypt(data, this.encryptionContext); // TODO handle exception
+            try {
+                data = encryption.layerDecrypt(data, this.encryptionContext);
+            } catch (error) {
+                // decryption failed
+                this.disconnect();
+                return;
+            }
         }
 
         this.parser.appendData(data);
@@ -736,7 +749,7 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
         })
     }
 
-    get(route: HTTPRoutes, queryParams: Record<string, string> = {}, headers: Record<string, string> = {}): Promise<HTTPResponse> {
+    get(route: HTTPRoutes, queryParams: ParsedUrlQuery = {}, headers: Record<string, string> = {}): Promise<HTTPResponse> {
         return this.sendRequest(HTTPMethod.GET, route, HTTPContentType.HAP_JSON, queryParams, headers);
     }
 
@@ -744,13 +757,17 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
         return this.sendRequest(HTTPMethod.PUT, route, HTTPContentType.HAP_JSON, queryParams, headers, data);
     }
 
+    post(route: HTTPRoutes, data: Buffer, queryParams: Record<string, string> = {}, headers: Record<string,string> = {}): Promise<HTTPResponse> {
+        return this.sendRequest(HTTPMethod.POST, route, HTTPContentType.HAP_JSON, queryParams, headers, data);
+    }
+
     sendPairRequest(route: HTTPRoutes, data?: Buffer): Promise<HTTPResponse> {
         return this.sendRequest(HTTPMethod.POST, route, HTTPContentType.PAIRING_TLV8, {}, {}, data);
     }
 
     private sendRequest(method: HTTPMethod, route: HTTPRoutes, contentType: HTTPContentType,
-                        queryParams: Record<string, string> = {}, headers: Record<string, string> = {}, data?: Buffer): Promise<HTTPResponse> {
-        if (!this.socket) {
+                        queryParams: ParsedUrlQuery = {}, headers: Record<string, string> = {}, data?: Buffer): Promise<HTTPResponse> {
+        if (!this.socket || this.socketClosed) {
             return Promise.reject("Connection was not established!");
         }
 
@@ -769,11 +786,21 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
 
         let query = "";
         Object.entries(queryParams).forEach(([key, value])=> {
-            if (query.length) {
-                query += ","
-            }
+            if (typeof value === "string") {
+                if (query.length) {
+                    query += ","
+                }
 
-            query += key + "=" + value
+                query += key + "=" + value;
+            } else {
+                value.forEach(value0 => {
+                    if (query.length) {
+                        query += ","
+                    }
+
+                    query += key + "=" + value0;
+                });
+            }
         });
         if (query) {
             query = "?" + query;

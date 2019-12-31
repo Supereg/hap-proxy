@@ -96,7 +96,7 @@ export type HTTPRequest = {
 
 export type HTTPServerResponse = {
     status: HTTPStatus,
-    contentType: HTTPContentType,
+    contentType?: HTTPContentType,
     data?: Buffer,
     headers?: Record<string, string>,
 }

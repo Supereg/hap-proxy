@@ -24,8 +24,12 @@ export namespace StorageManager {
         return util.format("ClientInfo.%s.json", clientId.toUpperCase());
     }
 
-    export function accessorFormatPersistKey(accessoryId: string) {
-        return util.format("AccessoryInfo.%s.json", accessoryId.toUpperCase());
+    export function identifierCacheFormatPersistKey(clientId: string) {
+        return util.format("IdentifierCache.%s.json", clientId.toUpperCase());
+    }
+
+    export function accessoryFormatPersistKey(accessoryName: string) {
+        return util.format("AccessoryInfo.%s.json", accessoryName.toUpperCase());
     }
 
 }

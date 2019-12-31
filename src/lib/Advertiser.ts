@@ -1,6 +1,6 @@
-import crypto from 'crypto';
+import crypto from '../crypto';
 import bonjour, { BonjourHap, MulticastOptions, Service } from 'bonjour-hap';
-import {AccessoryInfo} from "./storage/AccessoryInfo";
+import {AccessoryInfo} from "../storage/AccessoryInfo";
 
 export class Advertiser {
 

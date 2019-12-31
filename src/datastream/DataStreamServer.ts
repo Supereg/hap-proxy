@@ -1,33 +1,21 @@
 import createDebug from 'debug';
 import assert from 'assert';
 
-import * as encryption from '../lib/crypto/encryption';
-import * as hkdf from '../lib/crypto/hkdf';
+import * as encryption from '../crypto/encryption';
+import * as hkdf from '../crypto/hkdf';
 import {DataStreamParser, DataStreamReader, DataStreamWriter, Int64} from './DataStreamParser';
 import crypto from 'crypto';
 import net, {Socket} from 'net';
 import {EventEmitter as NodeEventEmitter} from "events";
 import {EventEmitter} from "../lib/EventEmitter";
 import Timeout = NodeJS.Timeout;
+import {HAPServerConnection, HAPServerConnectionEvents} from "../HAPServer";
 
 const debug = createDebug('DataStream:Server');
 
-export type Session = { // TODO implement
-    sessionID: string,
-    encryption?: {
-        sharedSec: Buffer,
-    },
-
-    on: Function,
-}
-
-export enum HAPSessionEvents { // TODO implement
-    CLOSED,
-}
-
 export type PreparedDataStreamSession = {
 
-    session: Session, // reference to the hap session which created the request
+    connection: HAPServerConnection, // reference to the hap session which created the request
 
     accessoryToControllerEncryptionKey: Buffer,
     controllerToAccessoryEncryptionKey: Buffer,
@@ -219,16 +207,16 @@ export class DataStreamServer extends EventEmitter<DataStreamServerEventMap> {
         return this;
     }
 
-    prepareSession(session: Session, controllerKeySalt: Buffer, callback: (preparedSession: PreparedDataStreamSession) => void) {
-        debug("Preparing for incoming HDS connection from session %s", session.sessionID);
+    prepareSession(connection: HAPServerConnection, controllerKeySalt: Buffer, callback: (preparedSession: PreparedDataStreamSession) => void) {
+        debug("Preparing for incoming HDS connection from session %s", connection.sessionID);
         const accessoryKeySalt = crypto.randomBytes(32);
         const salt = Buffer.concat([controllerKeySalt, accessoryKeySalt]);
 
-        const accessoryToControllerEncryptionKey = hkdf.HKDF("sha512", salt, session.encryption!.sharedSec, DataStreamServer.accessoryToControllerInfo, 32);
-        const controllerToAccessoryEncryptionKey = hkdf.HKDF("sha512", salt, session.encryption!.sharedSec, DataStreamServer.controllerToAccessoryInfo, 32);
+        const accessoryToControllerEncryptionKey = hkdf.HKDF("sha512", salt, connection.encryptionContext!.sharedSecret!, DataStreamServer.accessoryToControllerInfo, 32);
+        const controllerToAccessoryEncryptionKey = hkdf.HKDF("sha512", salt, connection.encryptionContext!.sharedSecret!, DataStreamServer.controllerToAccessoryInfo, 32);
 
         const preparedSession: PreparedDataStreamSession = {
-            session: session,
+            connection: connection,
             accessoryToControllerEncryptionKey: accessoryToControllerEncryptionKey,
             controllerToAccessoryEncryptionKey: controllerToAccessoryEncryptionKey,
             accessoryKeySalt: accessoryKeySalt,
@@ -240,7 +228,7 @@ export class DataStreamServer extends EventEmitter<DataStreamServerEventMap> {
     }
 
     private timeoutPreparedSession(preparedSession: PreparedDataStreamSession) {
-        debug("Prepared HDS session timed out out since no connection was opened for 10 seconds (%s)", preparedSession.session.sessionID);
+        debug("Prepared HDS session timed out out since no connection was opened for 10 seconds (%s)", preparedSession.connection.sessionID);
         const index = this.preparedSessions.indexOf(preparedSession);
         if (index >= 0) {
             this.preparedSessions.splice(index, 1);
@@ -319,7 +307,7 @@ export class DataStreamServer extends EventEmitter<DataStreamServerEventMap> {
         callback(identifiedSession);
 
         if (identifiedSession) {
-            debug("[%s] Connection was successfully identified (linked with sessionId: %s)", connection._remoteAddress, identifiedSession.session.sessionID);
+            debug("[%s] Connection was successfully identified (linked with sessionId: %s)", connection._remoteAddress, identifiedSession.connection.sessionID);
             const index = this.preparedSessions.indexOf(identifiedSession);
             if (index >= 0) {
                 this.preparedSessions.splice(index, 1);
@@ -427,7 +415,7 @@ export class DataStreamConnection extends EventEmitter<DataStreamConnectionEvent
     private static readonly MAX_PAYLOAD_LENGTH = 0x11111111111111111111;
 
     private socket: Socket;
-    private session?: Session; // reference to the hap session. is present when state > UNIDENTIFIED
+    private connection?: HAPServerConnection; // reference to the hap session. is present when state > UNIDENTIFIED
     readonly _remoteAddress: string;
     /*
         Since our DataStream server does only listen on one port and this port is supplied to every client
@@ -614,12 +602,12 @@ export class DataStreamConnection extends EventEmitter<DataStreamConnectionEvent
             this.emit(DataStreamConnectionEvents.IDENTIFICATION, firstFrame, (identifiedSession?: PreparedDataStreamSession) => {
                if (identifiedSession) {
                    // horray, we found our session
-                   this.session = identifiedSession.session;
+                   this.connection = identifiedSession.connection;
                    this.accessoryToControllerEncryptionKey = identifiedSession.accessoryToControllerEncryptionKey;
                    this.controllerToAccessoryEncryptionKey = identifiedSession.controllerToAccessoryEncryptionKey;
                    this.state = ConnectionState.EXPECTING_HELLO;
 
-                   this.session.on(HAPSessionEvents.CLOSED, this.onHAPSessionClosed.bind(this)); // register close listener
+                   this.connection.on(HAPServerConnectionEvents.DISCONNECTED, this.onHAPSessionClosed.bind(this)); // register close listener
                }
             });
 

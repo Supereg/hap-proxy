@@ -1,9 +1,10 @@
 import {StorageManager} from "./storage";
 import tweetnacl from "tweetnacl";
 import crypto from "crypto";
-import {HAPServerConnection} from "../../HAPServer";
-import {SetupCodeGenerator} from "../setup-code";
-import {HAPAccessoryCategory} from "../../types/hap-proxy";
+import {HAPServerConnection, HAPServerEvents} from "../HAPServer";
+import {SetupCodeGenerator} from "../lib/setup-code";
+import {HAPAccessoryCategory} from "../types/hap-proxy";
+import {EventEmitter} from "../lib/EventEmitter";
 
 export enum PermissionTypes {
     USER = 0x00,
@@ -22,7 +23,15 @@ export type SavedPairingInformation = {
     permission: PermissionTypes,
 }
 
-export class AccessoryInfo {
+export enum AccessoryInfoEvents {
+    REMOVED_CLIENT = "removed-client",
+}
+
+export type AccessoryInfoEventMap = {
+    [AccessoryInfoEvents.REMOVED_CLIENT]: (initiator: HAPServerConnection, clientId: string) => void;
+}
+
+export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
 
     private readonly accessoryName: string;
     readonly accessoryId: string;
@@ -42,6 +51,7 @@ export class AccessoryInfo {
     setupID: string = "";
 
     private constructor(accessoryName: string, accessoryId: string) {
+        super();
         this.accessoryName = accessoryName;
         this.accessoryId = accessoryId;
     }
@@ -111,7 +121,7 @@ export class AccessoryInfo {
             this.pairedAdminClientCount--;
         delete this.pairedClients[clientId];
 
-        // TODO Session.destroyExistingConnectionsAfterUnpair(controller, clientId);
+        this.emit(AccessoryInfoEvents.REMOVED_CLIENT, controller, clientId);
     };
 
     /**
@@ -134,7 +144,7 @@ export class AccessoryInfo {
         return this.pairedAdminClientCount > 0;
     }
 
-// Gets the public key for a paired client as a Buffer, or falsey value if not paired.
+    // Gets the public key for a paired client as a Buffer, or falsey value if not paired.
     getClientPublicKey = (clientId: string) => {
         const pairingInformation = this.pairedClients[clientId];
         if (pairingInformation) {
@@ -176,14 +186,14 @@ export class AccessoryInfo {
             saved.pairedClients.push(savedPairing);
         }
 
-        const storageKey = StorageManager.accessorFormatPersistKey(this.accessoryName);
+        const storageKey = StorageManager.accessoryFormatPersistKey(this.accessoryName);
         await StorageManager.init();
 
         await StorageManager.setItem(storageKey, saved);
     }
 
     static async loadOrCreate(accessoryName: string, category: HAPAccessoryCategory, pincode?: string) {
-        const storageKey = StorageManager.accessorFormatPersistKey(accessoryName);
+        const storageKey = StorageManager.accessoryFormatPersistKey(accessoryName);
 
         await StorageManager.init();
         const saved = await StorageManager.getItem(storageKey);

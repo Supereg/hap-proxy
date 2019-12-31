@@ -1,7 +1,7 @@
 import {HAPEncryptionContext, HAPStates, HAPStatusCode, PairMethods, TLVErrors, TLVValues} from "./types/hap-proxy";
 import net, {AddressInfo, Server, Socket} from "net";
 import createDebug from 'debug';
-import * as encryption from "./lib/crypto/encryption";
+import * as encryption from "./crypto/encryption";
 import {
     HTTPContentType,
     HTTPMethod,
@@ -14,13 +14,15 @@ import {
 import {EventEmitter} from "./lib/EventEmitter";
 import srp from 'fast-srp-hap';
 import * as crypto from "crypto";
-import * as tlv from './lib/utils/tlv';
-import * as hkdf from './lib/crypto/hkdf';
+import * as tlv from './utils/tlv';
+import * as hkdf from './crypto/hkdf';
 import tweetnacl from 'tweetnacl';
 import {Advertiser} from "./lib/Advertiser";
-import {AccessoryInfo, PairingInformation, PermissionTypes} from "./lib/storage/AccessoryInfo";
-import {once} from "./lib/utils/once";
+import {AccessoryInfo, AccessoryInfoEvents, PairingInformation, PermissionTypes} from "./storage/AccessoryInfo";
+import {once} from "./utils/once";
 import * as url from "url";
+import {ParsedUrlQuery} from "querystring";
+import * as uuid from "./utils/uuid";
 
 const debug = createDebug("HAPServer");
 const debugCon = createDebug("HAPProxy");
@@ -51,6 +53,8 @@ export type ServerPairVerifySession = {
     sessionKey: Buffer,
 }
 
+export type HTTPServerResponseCallback = (error?: Error, response?: HTTPServerResponse) => void;
+
 export enum HAPServerEvents {
     ACCESSORIES = "accessories",
     GET_CHARACTERISTICS = "get-characteristics",
@@ -60,16 +64,16 @@ export enum HAPServerEvents {
 }
 
 export type HAPServerEventMap = {
-    [HAPServerEvents.ACCESSORIES]: (connection: HAPServerConnection, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
-    [HAPServerEvents.GET_CHARACTERISTICS]: (connection: HAPServerConnection, ids: string, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
-    [HAPServerEvents.SET_CHARACTERISTICS]: (connection: HAPServerConnection, writeRequest: Buffer, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
-    [HAPServerEvents.PREPARE_WRITE]: (connection: HAPServerConnection, prepareRequest: Buffer, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
-    [HAPServerEvents.RESOURCE]: (connection: HAPServerConnection, resourceRequest: Buffer, callback: (error?: Error, response?: HTTPServerResponse) => void) => void;
+    [HAPServerEvents.ACCESSORIES]: (connection: HAPServerConnection, callback: HTTPServerResponseCallback) => void;
+    [HAPServerEvents.GET_CHARACTERISTICS]: (connection: HAPServerConnection, query: ParsedUrlQuery, callback: HTTPServerResponseCallback) => void;
+    [HAPServerEvents.SET_CHARACTERISTICS]: (connection: HAPServerConnection, writeRequest: Buffer, callback: HTTPServerResponseCallback) => void;
+    [HAPServerEvents.PREPARE_WRITE]: (connection: HAPServerConnection, prepareRequest: Buffer, callback: HTTPServerResponseCallback) => void;
+    [HAPServerEvents.RESOURCE]: (connection: HAPServerConnection, resourceRequest: Buffer, callback: HTTPServerResponseCallback) => void;
 }
 
 export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
-    private accessoryInfo: AccessoryInfo;
+    accessoryInfo: AccessoryInfo;
 
     private tcpServer: Server;
     private connections: HAPServerConnection[] = [];
@@ -92,6 +96,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
     constructor(accessoryInfo: AccessoryInfo) {
         super();
         this.accessoryInfo = accessoryInfo;
+        this.accessoryInfo.on(AccessoryInfoEvents.REMOVED_CLIENT, this.handleClientUnpaired.bind(this));
 
         this.tcpServer = net.createServer();
         this.tcpServer.on('listening', this.handleListening.bind(this));
@@ -105,8 +110,8 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
     }
 
     stop() {
-        this.tcpServer.close(); // TODO close does not disconnect clients
-        this.connections = []; // TODO ?
+        this.tcpServer.close();
+        this.connections.forEach(connection => connection.disconnect());
     }
 
     private handleListening() {
@@ -140,6 +145,22 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         if (this.currentPairSetupSession && this.currentPairSetupSession.connection === connection) {
             this.currentPairSetupSession = undefined;
         }
+    }
+
+    private handleClientUnpaired(initiator: HAPServerConnection, clientId: string) {
+        this.connections.forEach(connection => {
+            if (connection.clientId !== clientId) {
+                return;
+            }
+
+            if (connection === initiator) {
+                // the session which initiated the unpair removed it's own username, wait until the unpair request is finished
+                // until we kill his connection
+                connection.disconnectAfterWrite();
+            } else {
+                connection.disconnect();
+            }
+        });
     }
 
     // noinspection JSMethodCanBeStatic
@@ -624,7 +645,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         const permission: PermissionTypes = tlvData[TLVValues.PERMISSIONS].readUInt8(0);
 
         // step 2
-        if (!this.accessoryInfo.hasAdminPermissions(clientId)) {
+        if (!this.accessoryInfo.hasAdminPermissions(connection.clientId!)) {
             return this.abortPairings(TLVErrors.AUTHENTICATION);
         }
 
@@ -655,7 +676,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         const clientId = tlvData[TLVValues.IDENTIFIER].toString();
 
         // step 2
-        if (!this.accessoryInfo.hasAdminPermissions(clientId)) {
+        if (!this.accessoryInfo.hasAdminPermissions(connection.clientId!)) {
             return this.abortPairings(TLVErrors.AUTHENTICATION);
         }
 
@@ -737,15 +758,9 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
             }
 
             const query = url.parse(request.uri, true).query;
-            if (!query || !query.id) {
-                // TODO return appropriate error
-                return Promise.reject();
-            }
-
-            const idsString = query.id;
 
             return new Promise<HTTPServerResponse>((resolve, reject) => {
-               this.emit(HAPServerEvents.GET_CHARACTERISTICS, connection, idsString, once((error: Error, response: HTTPServerResponse) => {
+               this.emit(HAPServerEvents.GET_CHARACTERISTICS, connection, query, once((error: Error, response: HTTPServerResponse) => {
                   if (error || !response) {
                       reject(error || new Error("Response was undefined!"));
                   } else {
@@ -860,15 +875,19 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
 
     private readonly routeHandler: Record<HTTPRoutes, HTTPRequestHandler>;
 
+    sessionID: string;
     remoteAddress: AddressInfo;
 
     pairVerifySession?: Partial<ServerPairVerifySession>;
     encryptionContext?: HAPEncryptionContext;
 
     clientId?: string;
-    pairingVerified: boolean = false;
 
-    private haltEvents: boolean = false;
+    pairingVerified: boolean = false;
+    private processingRequest: boolean = false;
+    private disconnectAfterResponse: boolean = false;
+    private socketClosed: boolean = false;
+
     private eventQueue: Buffer[] = []; // queue of unencrypted events
 
     private httpWorkingQueue: Promise<any> = Promise.resolve();
@@ -884,16 +903,43 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
         this.routeHandler = routeHandler;
 
         this.remoteAddress = this.socket.address() as AddressInfo;
-        /* TODO gen some sessionID like hap-nodejs?
-        this.sessionID = uuid.generate(clientSocket.remoteAddress + ':' + clientSocket.remotePort);
-         */
+        this.sessionID = uuid.generate(this.remoteAddress.address + ":" + this.remoteAddress.port);
+        this.socket.setNoDelay(true);
+        this.socket.setKeepAlive(true);
+    }
+
+    disconnect() {
+        this.pairingVerified = false;
+        this.socketClosed = true;
+        this.socket.end();
+    }
+
+    disconnectAfterWrite() {
+        if (this.processingRequest) {
+            this.disconnectAfterResponse = true;
+        } else {
+            this.disconnect();
+        }
     }
 
     private handleData(data: Buffer) {
-        this.haltEvents = true;
+        if (this.socketClosed) {
+            return;
+        }
+
+        if (this.processingRequest) { // TODO do we need this
+            debugCon("Client tried sending http request while another request is still in progress");
+            return;
+        }
+        this.processingRequest = true;
 
         if (this.encryptionContext) {
-            data = encryption.layerDecrypt(data, this.encryptionContext); // TODO handle exception
+            try {
+                data = encryption.layerDecrypt(data, this.encryptionContext);
+            } catch (error) {
+                this.disconnect();
+                return;
+            }
         }
 
         this.parser.appendData(data);
@@ -902,7 +948,9 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
 
         requests.forEach(request => {
             const uri = request.uri;
-            const requestHandler = this.routeHandler[uri as HTTPRoutes];
+
+            const route = uri.split("?")[0];
+            const requestHandler = this.routeHandler[route as HTTPRoutes];
 
             console.log("Received http message"); // TODO remove
             console.log(request);
@@ -914,26 +962,39 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
                         debugCon(reason.stack);
                     }
 
-                    return Promise.resolve({ // TODO handle error reason
-                        status: 500,
-                        contentType: HTTPContentType.TEXT_HTML,
-                        data: Buffer.from("Error occurred: " + reason),
-                    })
+                    const response: HTTPServerResponse = {
+                        status: 200,
+                        contentType: this.pairingVerified
+                            ? HTTPContentType.HAP_JSON
+                            : HTTPContentType.PAIRING_TLV8,
+                        data: this.pairingVerified
+                            ? Buffer.from(JSON.stringify({
+                                status: HAPStatusCode.SERVICE_COMMUNICATION_FAILURE,
+                            }))
+                            : tlv.encode(TLVValues.ERROR, TLVErrors.UNKNOWN),
+                    };
+                    return Promise.resolve(response)
                 })
                 .then(response => this.sendResponse(response));
         });
     }
 
     private sendResponse(response: HTTPServerResponse) {
-        // TODO check if we are still connected
+        if (this.socketClosed) {
+            throw new Error("Tried sending http response on a closed socket!");
+        }
 
         console.log("Sending http response"); // TODO remove
         console.log(response);
+        //if (response.data)
+            //console.log("data: " + response.data.toString("hex"));
 
         const data = response.data || Buffer.alloc(0);
 
         const headers: Record<string, string> = response.headers || {};
-        headers["Content-Type"] = response.contentType;
+        if (response.contentType && data.length > 0) {
+            headers["Content-Type"] = response.contentType;
+        }
         headers["Content-Length"] = data.length + "";
 
         let responseBuf = Buffer.concat([
@@ -955,8 +1016,13 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
 
         this.socket.write(responseBuf);
 
-        this.haltEvents = false;
+        this.processingRequest = false;
         this.flushEventQueue();
+
+        if (this.disconnectAfterResponse) {
+            this.disconnectAfterResponse = false;
+            this.disconnect();
+        }
     }
 
     sendRawEvent(data: Buffer) {
@@ -973,7 +1039,7 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
             data,
         ]);
 
-        if (this.haltEvents) {
+        if (this.processingRequest) {
             this.eventQueue.push(eventBuf);
         } else {
             if (this.encryptionContext) {

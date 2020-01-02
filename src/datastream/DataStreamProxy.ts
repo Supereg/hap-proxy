@@ -10,6 +10,8 @@ import {HAPServerConnection} from "../HAPServer";
 import {HAPClientConnection} from "../HAPClient";
 import crypto from "crypto";
 import {DataStreamConnection, DataStreamConnectionEventMap, DataStreamConnectionEvents} from "./DataStreamConnection";
+import {DataStreamMessage} from "./index";
+import * as fs from "fs";
 
 const debug = createDebug('DataStream:Proxy');
 
@@ -23,7 +25,7 @@ export class DataStreamProxy {
     }
 
     generateKeySalt(): Buffer {
-        return crypto.randomBytes(16);
+        return crypto.randomBytes(32);
     }
 
     setupClient(hapConnection: HAPClientConnection, host: string, listeningPort: number, salt: Buffer): Promise<DataStreamClientConnection> {
@@ -41,10 +43,31 @@ export class DataStreamProxy {
         const clientConnection = preparedSession.hdsClientConnection;
 
         serverConnection.on(DataStreamConnectionEvents.PAYLOAD, DataStreamProxy.forwardPayload.bind(this, clientConnection));
+        serverConnection.on(DataStreamConnectionEvents.MESSAGE, (message: DataStreamMessage) => {
+            console.log("Controller > Accessory: " + message.protocol + " " + message.topic);
+            fs.appendFileSync("hds-communication.txt", "Controller > Accessory: " + DataStreamProxy.stringify(message));
+        });
         serverConnection.on(DataStreamConnectionEvents.CLOSED, DataStreamProxy.forwardClose.bind(this, clientConnection));
 
         clientConnection.on(DataStreamConnectionEvents.PAYLOAD, DataStreamProxy.forwardPayload.bind(this, serverConnection));
+        clientConnection.on(DataStreamConnectionEvents.MESSAGE, (message: DataStreamMessage) => {
+            console.log("Accessory > Controller: " + message.protocol + " " + message.topic);
+            fs.appendFileSync("hds-communication.txt", "Accessory > Controller: " + DataStreamProxy.stringify(message));
+        });
         clientConnection.on(DataStreamConnectionEvents.CLOSED, DataStreamProxy.forwardClose.bind(this, serverConnection));
+    }
+
+    private static stringify(value: any) {
+        return JSON.stringify(value, (_, v) => {
+            if (typeof v === 'bigint') {
+                return v.toString();
+            } else if (typeof v === "object" && v.type === "Buffer") {
+                const data = v.data;
+                return Buffer.from(data).toString("hex");
+            } else {
+                return v;
+            }
+        }, 4);
     }
 
     private static forwardPayload(connection: DataStreamConnection<DataStreamConnectionEventMap>, payload: Buffer) {

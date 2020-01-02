@@ -407,7 +407,7 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
 
     ensurePairingVerified() {
         return this.connectionChain = this.connectionChain
-            .then(() => this.ensureConnected())
+            .then(() => this.client.ensureConnected(this))
             .then(() => this.client.checkPaired(this))
             .then(() => this.pairingVerified? Promise.resolve(): this.sendPairVerifyM1());
     }

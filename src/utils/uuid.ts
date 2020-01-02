@@ -3,7 +3,7 @@ import crypto, { BinaryLike } from 'crypto';
 export namespace uuid {
     export const BASE_UUID = '-0000-1000-8000-0026BB765291';
 
-    const VALID_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const VALID_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
     const SHORT_FORM_REGEX = /^0*([0-9a-f]{1,8})-([0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
     const VALID_SHORT_REGEX = /^[0-9a-f]{1,8}$/i;
 
@@ -61,7 +61,7 @@ export namespace uuid {
 
     export function toLongForm(uuid: string, base: string = BASE_UUID) {
         if (isValid(uuid)) return uuid.toUpperCase();
-        if (!VALID_SHORT_REGEX.test(uuid)) throw new TypeError('uuid was not a valid UUID or short form UUID');
+        if (!VALID_SHORT_REGEX.test(uuid)) throw new TypeError('uuid was not a valid UUID or short form UUID (' + uuid + ')');
         if (!isValid('00000000' + base)) throw new TypeError('base was not a valid base UUID');
 
         return (('00000000' + uuid).substr(-8) + base).toUpperCase();

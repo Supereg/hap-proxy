@@ -70,6 +70,9 @@ export class HAPBonjourBrowser extends EventEmitter<BonjourBrowserEventMap> {
         if (service.name !== this.clientInfo.accessoryName) {
             return; // ignore if this is not the service we are searching for
         }
+        if (!this.browser) {
+            return;
+        }
 
         this.browser!.stop(); // bonjour-hap currently doesn't support events when txt records get updated
         this.browser = undefined;

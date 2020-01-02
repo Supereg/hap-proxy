@@ -3,7 +3,8 @@
 `hap-proxy` is a transparent proxy for the HomeKit Accessory Protocol (HAP).
 On the one hand it acts as an HomeKit accessory and exposes and HAP server (to which you would connect to)
 and on the other hand it acts as an HomeKit controller to an existing HomeKit accessory.
-`hap-proxy` is compliant with hap v1.1.0 and also support proxying HomeKit Data Streams (v1.0).
+`hap-proxy` is compliant with hap v1.1.0 meaning it is also capable of proxying HomeKit Data Streams (v1.0) used for
+HomeKit Remotes and Secure Video.
 
 `hap-proxy` is currently work in progress and definitely not finished.
 Currently the ambition of the project is to have an hap proxy which can be used for research and reverse engineering.

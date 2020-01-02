@@ -8,13 +8,14 @@ import {
 } from "./HAPServer";
 import {HTTPContentType, HTTPResponse, HTTPServerResponse, HTTPStatus} from "./lib/http-protocol";
 import {ParsedUrlQuery} from "querystring";
-import {DataStreamTransportManagementServiceFilter, AccessoryInformationServiceFilter} from "./filters";
+import {AccessoryInformationServiceFilter, DataStreamTransportManagementServiceFilter} from "./filters";
 import {ServiceType} from "./definitions";
 import {
     AttributeDatabase,
     CharacteristicsReadResponse,
     CharacteristicsWriteRequest,
-    CharacteristicsWriteResponse
+    CharacteristicsWriteResponse,
+    HAPStatusCode
 } from "./types/hap-proxy";
 import {IdentifierCache} from "./storage/IdentifierCache";
 import assert from "assert";
@@ -195,7 +196,6 @@ export class HAPProxy {
                 // TODO check if any services got removed and then remove the appropriate service filter
 
                 const attributeDatabase: AttributeDatabase = JSON.parse(httpResponse.body.toString());
-                // console.log(attributeDatabase); // TODO remove
 
                 attributeDatabase.accessories.forEach(accessory => {
                     accessory.services.forEach(service => {
@@ -335,7 +335,11 @@ export class HAPProxy {
                     const response: CharacteristicsWriteResponse = JSON.parse(httpResponse.body.toString());
 
                     response.characteristics.forEach(characteristic => {
-                        if (characteristic.status !== 0 || characteristic.value === undefined) {
+                        if (characteristic.status !== 0) {
+                            console.log("Got an error for our put request: " + HAPStatusCode[characteristic.status]); // TODO message
+                            return;
+                        }
+                        if (characteristic.value === undefined) {
                             return;
                         }
 

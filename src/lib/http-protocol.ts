@@ -183,7 +183,12 @@ export abstract class HTTPParser<T> {
 
         const sizeInt = parseInt(size, 16); // lol
         // sizeInt == 0 indicates end of chunked data
-        return this.readFixedLengthLine(sizeInt);
+        const chunk = this.readFixedLengthLine(sizeInt);
+        if (chunk === null) { // reset index to the state before we read the size
+            this.readerIndex = oldReaderIndex;
+        }
+
+        return chunk;
     }
 
     readFixedLengthBuffer(length: number): Buffer | null {
@@ -243,14 +248,13 @@ export class HTTPResponseParser extends HTTPParser<HTTPResponse> {
                     let headerLine;
                     while ((headerLine = this.readStringLine())) {
                         let [name, value] = headerLine.split(/: /, 2);
-                        debug("Successfully parse header '%s'='%s'", name, value);
                         this.currentResponse.headers![name] = value;
                     }
 
                     if (headerLine === null) {
                         return finishedResponses; // we couldn't finish parsing
                     } else {
-                        debug("found headers %o", this.currentResponse.headers);
+                        debug("Successfully parsed headers: %o", this.currentResponse.headers);
                         this.state = ParsingState.RESPONSE_BODY;
                         // fallthrough into next state
                     }
@@ -268,7 +272,9 @@ export class HTTPResponseParser extends HTTPParser<HTTPResponse> {
                                 return finishedResponses;
                             }
                         } else if (this.currentResponse.headers![HTTPHeader.TRANSFER_ENCODING] === "chunked") { // typically returned by hap-nodejs
-                            this.currentResponse.body = Buffer.alloc(0);
+                            if (!this.currentResponse.body) {
+                                this.currentResponse.body = Buffer.alloc(0);
+                            }
 
                             for(;;) {
                                 const chunk = this.readChunk();
@@ -291,6 +297,7 @@ export class HTTPResponseParser extends HTTPParser<HTTPResponse> {
 
                     // reset stuff
                     this.currentResponse = {};
+
                     this.buffer = this.buffer.slice(this.readerIndex, this.buffer.length); // drop read bytes
                     this.readerIndex = 0; // reset reader index
                     this.state = ParsingState.HEAD; // reset state

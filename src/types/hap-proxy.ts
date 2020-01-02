@@ -113,6 +113,13 @@ export enum HAPAccessoryCategory {
     ROUTER = 33 // HomeKit enabled router
 }
 
+export enum PairingStatusFlags {
+    // noinspection JSUnusedGlobalSymbols
+    PAIRED = 0x01,
+    NOT_JOINED_WIFI = 0x02,
+    PROBLEM = 0x04,
+}
+
 export class HAPEncryptionContext {
 
     sharedSecret: Buffer;

@@ -1,20 +1,31 @@
 import {StorageManager} from "./storage";
+import {ClientInfo} from "./ClientInfo";
 
-export interface IdentifierCacheEntry {
+export interface TypeEntry {
     serviceType: string,
     characteristicType: string;
+}
+
+export interface IdentifierCacheEntry {
+    aid: number,
+    serviceIid: number,
+    characteristicIid: number,
+    serviceType: string,
+    characteristicType: string,
 }
 
 // mapping of 'accessoryId.instanceId' to characteristics type (aka uuid)
 export class IdentifierCache {
 
-    private readonly clientId: string;
+    private readonly clientInfo: ClientInfo;
 
-    private typeCache: Record<string, IdentifierCacheEntry> = {}; // indexed by "aid.iid" (iid of the characteristic)
+    private typeCache: Record<string, TypeEntry> = {}; // indexed by "aid.iid" (iid of the characteristic)
     private serviceIidCache: Record<string, number> = {}; // indexed by "aid.iid" (iid of the characteristic); value is iid of the service
 
-    constructor(clientId: string) {
-        this.clientId = clientId;
+    private loaded = false;
+
+    constructor(clientInfo: ClientInfo) {
+        this.clientInfo = clientInfo;
     }
 
     rebuild() {
@@ -30,13 +41,28 @@ export class IdentifierCache {
         this.serviceIidCache[aid + "." + characteristicIid] = serviceIid;
     }
 
+    entries(): IdentifierCacheEntry[] {
+        return Object.entries(this.typeCache).map(([id, types]) => {
+            const [aid, iid] = id.split("|");
+            const serviceIid = this.serviceIidCache[id];
+
+            return {
+                aid: parseInt(aid),
+                serviceIid: serviceIid,
+                characteristicIid: parseInt(iid),
+                serviceType: types.serviceType,
+                characteristicType: types.characteristicType,
+            };
+        });
+    }
+
     /**
      * Lookup of the service and characteristic types for the given ids
      *
      * @param aid {number} - accessory id
      * @param iid {number} - instance id of the characteristic
      */
-    lookupType(aid: number, iid: number): IdentifierCacheEntry {
+    lookupType(aid: number, iid: number): TypeEntry {
         return this.typeCache[aid + "." + iid];
     }
 
@@ -51,7 +77,12 @@ export class IdentifierCache {
     }
 
     async save() {
-        const storageKey = StorageManager.identifierCacheFormatPersistKey(this.clientId);
+        if (!this.loaded) {
+            throw new Error("Tried saving ClientInfo before it was even loaded!");
+        }
+
+        await this.clientInfo.load();
+        const storageKey = StorageManager.identifierCacheFormatPersistKey(this.clientInfo.clientId);
         await StorageManager.init();
 
         const saved = {
@@ -62,21 +93,21 @@ export class IdentifierCache {
         await StorageManager.setItem(storageKey, saved);
     }
 
-    static async loadOrCreate(clientId: string) {
-        const storageKey = StorageManager.clientFormatPersistKey(clientId);
+    async load() {
+        await this.clientInfo.load();
+        const storageKey = StorageManager.identifierCacheFormatPersistKey(this.clientInfo.clientId);
 
         await StorageManager.init();
         const saved = await StorageManager.getItem(storageKey);
 
-        const identifierCache = new IdentifierCache(clientId);
-        if (saved) {
-            identifierCache.typeCache = saved.typeCache || {};
-            identifierCache.serviceIidCache = saved.serviceIidCache || {};
-        } else {
-            await identifierCache.save();
-        }
+        this.loaded = true;
 
-        return identifierCache;
+        if (saved) {
+            this.typeCache = saved.typeCache || {};
+            this.serviceIidCache = saved.serviceIidCache || {};
+        } else {
+            await this.save();
+        }
     }
 
 }

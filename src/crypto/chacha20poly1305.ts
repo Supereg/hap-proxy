@@ -416,10 +416,10 @@ export function aead_init(c20ctx: Chacha20Ctx, key: Buffer, nonce: Buffer) {
     chacha20_keysetup(c20ctx, key);
     chacha20_ivsetup(c20ctx, nonce);
 
-    const subkey: any = [];
-    chacha20_keystream(c20ctx, subkey, 64);
+    const subKey: any = [];
+    chacha20_keystream(c20ctx, subKey, 64);
 
-    return subkey.slice(0, 32);
+    return subKey.slice(0, 32);
 }
 
 export function store64(dst: Uint8Array, pos: number, num: number) {

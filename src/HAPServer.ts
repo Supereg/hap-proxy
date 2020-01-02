@@ -56,19 +56,25 @@ export type ServerPairVerifySession = {
 export type HTTPServerResponseCallback = (error?: Error, response?: HTTPServerResponse) => void;
 
 export enum HAPServerEvents {
+    CONNECTION = "connection",
     ACCESSORIES = "accessories",
     GET_CHARACTERISTICS = "get-characteristics",
     SET_CHARACTERISTICS = "set-characteristics",
     PREPARE_WRITE = "prepare",
     RESOURCE = "resource",
+    PAIRED = "paired",
+    UNPAIRED = "unpaired",
 }
 
 export type HAPServerEventMap = {
+    [HAPServerEvents.CONNECTION]: (connection: HAPServerConnection) => void;
     [HAPServerEvents.ACCESSORIES]: (connection: HAPServerConnection, callback: HTTPServerResponseCallback) => void;
     [HAPServerEvents.GET_CHARACTERISTICS]: (connection: HAPServerConnection, query: ParsedUrlQuery, callback: HTTPServerResponseCallback) => void;
     [HAPServerEvents.SET_CHARACTERISTICS]: (connection: HAPServerConnection, writeRequest: Buffer, callback: HTTPServerResponseCallback) => void;
     [HAPServerEvents.PREPARE_WRITE]: (connection: HAPServerConnection, prepareRequest: Buffer, callback: HTTPServerResponseCallback) => void;
     [HAPServerEvents.RESOURCE]: (connection: HAPServerConnection, resourceRequest: Buffer, callback: HTTPServerResponseCallback) => void;
+    [HAPServerEvents.PAIRED]: () => void;
+    [HAPServerEvents.UNPAIRED]: () => void;
 }
 
 export class HAPServer extends EventEmitter<HAPServerEventMap> {
@@ -78,7 +84,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
     private tcpServer: Server;
     private connections: HAPServerConnection[] = [];
 
-    private advertiser: Advertiser;
+    advertiser: Advertiser;
 
     private routeHandlers: Record<HTTPRoutes, HTTPRequestHandler> = {
         [HTTPRoutes.IDENTIFY]: this.handleIdentify.bind(this),
@@ -106,7 +112,9 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
     }
 
     listen(targetPort?: number) {
-        this.tcpServer.listen(targetPort);
+        this.accessoryInfo.load() // transparently load AccessoryInfo from disk
+            .then(() => debug("Loaded AccessoryInfo for '%s'", this.accessoryInfo.displayName))
+            .then(() => this.tcpServer.listen(targetPort));
     }
 
     stop() {
@@ -131,11 +139,13 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
         this.connections.push(connection);
 
-        debug("Received new connection on %s:%d!", connection.remoteAddress.address, connection.remoteAddress.port);
+        debug("Received new connection on %s!", connection.remoteAddress);
+
+        this.emit(HAPServerEvents.CONNECTION, connection);
     }
 
     private handleConnectionClosed(connection: HAPServerConnection) {
-        debug("Connection disconnected %s:%d!", connection.remoteAddress.address, connection.remoteAddress.port);
+        debug("Connection disconnected %s!", connection.remoteAddress);
 
         const index = this.connections.indexOf(connection);
         if (index >= 0) {
@@ -427,6 +437,8 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
         debug("Successfully paired!"); // TODO debug message
 
+        this.emit(HAPServerEvents.PAIRED);
+
         return this.accessoryInfo.save()
             .then(() => Promise.resolve({
                 data: exchangeResponse,
@@ -685,6 +697,8 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
         if (!this.accessoryInfo.hasPairings()) {
             this.advertiser.updateAdvertisement();
+
+            this.emit(HAPServerEvents.UNPAIRED);
         }
 
         // TODO log pairing removed
@@ -876,7 +890,7 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
     private readonly routeHandler: Record<HTTPRoutes, HTTPRequestHandler>;
 
     sessionID: string;
-    remoteAddress: AddressInfo;
+    remoteAddress: string;
 
     pairVerifySession?: Partial<ServerPairVerifySession>;
     encryptionContext?: HAPEncryptionContext;
@@ -902,13 +916,17 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
 
         this.routeHandler = routeHandler;
 
-        this.remoteAddress = this.socket.address() as AddressInfo;
-        this.sessionID = uuid.generate(this.remoteAddress.address + ":" + this.remoteAddress.port);
+        this.remoteAddress = this.socket.remoteAddress + ":" + this.socket.remotePort;
+        this.sessionID = uuid.generate(this.remoteAddress);
         this.socket.setNoDelay(true);
         this.socket.setKeepAlive(true);
     }
 
     disconnect() {
+        if (this.socketClosed) {
+            return;
+        }
+
         this.pairingVerified = false;
         this.socketClosed = true;
         this.socket.end();
@@ -952,8 +970,6 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
             const route = uri.split("?")[0];
             const requestHandler = this.routeHandler[route as HTTPRoutes];
 
-            console.log("Received http message"); // TODO remove
-            console.log(request);
             this.httpWorkingQueue = this.httpWorkingQueue
                 .then(() => requestHandler? requestHandler(this, request): NOT_FOUND_HANDLER(this, request))
                 .catch(reason => {
@@ -983,11 +999,6 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
         if (this.socketClosed) {
             throw new Error("Tried sending http response on a closed socket!");
         }
-
-        console.log("Sending http response"); // TODO remove
-        console.log(response);
-        //if (response.data)
-            //console.log("data: " + response.data.toString("hex"));
 
         const data = response.data || Buffer.alloc(0);
 
@@ -1026,9 +1037,6 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
     }
 
     sendRawEvent(data: Buffer) {
-        console.log("Sending EVENT"); // TODO remove debug
-        console.log(data.toString());
-
         let eventBuf = Buffer.concat([
             Buffer.from(
                 `EVENT/1.0 200 OK\r\n` +

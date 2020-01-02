@@ -1,12 +1,15 @@
 import {StorageManager} from "./storage";
 import tweetnacl from "tweetnacl";
 import crypto from "crypto";
-import {HAPServerConnection, HAPServerEvents} from "../HAPServer";
+import {HAPServerConnection} from "../HAPServer";
 import {SetupCodeGenerator} from "../lib/setup-code";
 import {HAPAccessoryCategory} from "../types/hap-proxy";
 import {EventEmitter} from "../lib/EventEmitter";
+import {ClientInfo} from "./ClientInfo";
+import {HAPDeviceInfo} from "../lib/HAPBonjourBrowser";
 
 export enum PermissionTypes {
+    // noinspection JSUnusedGlobalSymbols
     USER = 0x00,
     ADMIN = 0x01, // admins are the only ones who can add/remove/list pairings (also some characteristics are restricted)
 }
@@ -34,9 +37,10 @@ export type AccessoryInfoEventMap = {
 export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
 
     private readonly accessoryName: string;
-    readonly accessoryId: string;
-    displayName: string = ""; // TODO do we need that?
-    category: HAPAccessoryCategory = HAPAccessoryCategory.OTHER; // TODO do we need that?
+    category: HAPAccessoryCategory = HAPAccessoryCategory.OTHER;
+
+    accessoryId: string = "";
+    displayName: string = "";
 
     pincode: string = "";
 
@@ -46,14 +50,26 @@ export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
     pairedClients: Record<string, PairingInformation> = {};
     private pairedAdminClientCount: number = 0;
 
-    configVersion: number = 1;
-    // configHash: string = ""; hash created by HAP-NodeJS to check whether to increment the configVersion or not
+    configNumber: number = 1; // hap configuration number
     setupID: string = "";
 
-    private constructor(accessoryName: string, accessoryId: string) {
+    private loaded = false;
+
+    constructor(accessoryName: string, pincode?: string) {
         super();
         this.accessoryName = accessoryName;
-        this.accessoryId = accessoryId;
+        this.pincode = pincode || "";
+    }
+
+    initWithClientInfo(deviceInfo: HAPDeviceInfo) {
+        this.configNumber = deviceInfo.configNumber;
+        this.category = deviceInfo.category;
+        return this.save();
+    }
+
+    updateConfigNumber(configNumber: number) {
+        this.configNumber = configNumber;
+        return this.save();
     }
 
     /**
@@ -124,6 +140,7 @@ export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
         this.emit(AccessoryInfoEvents.REMOVED_CLIENT, controller, clientId);
     };
 
+    // noinspection JSUnusedGlobalSymbols
     /**
      * Check if clientId is paired
      * @param username
@@ -155,10 +172,13 @@ export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
     };
 
     async save() {
+        if (!this.loaded) {
+            throw new Error("Tried saving AccessoryInfo before it was even loaded!");
+        }
+
         const saved = {
             accessoryId: this.accessoryId,
             displayName: this.displayName,
-            category: this.category,
 
             pincode: this.pincode,
 
@@ -167,7 +187,7 @@ export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
 
             pairedClients: [],
 
-            configVersion: this.configVersion,
+            configNumber: this.configNumber,
             setupID: this.setupID,
         };
 
@@ -192,27 +212,25 @@ export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
         await StorageManager.setItem(storageKey, saved);
     }
 
-    static async loadOrCreate(accessoryName: string, category: HAPAccessoryCategory, pincode?: string) {
-        const storageKey = StorageManager.accessoryFormatPersistKey(accessoryName);
+    async load() {
+        const storageKey = StorageManager.accessoryFormatPersistKey(this.accessoryName);
 
         await StorageManager.init();
         const saved = await StorageManager.getItem(storageKey);
 
+        this.loaded = true;
+
         if (saved) {
-            const accessoryId = saved.accessoryId;
+            this.accessoryId = saved.accessoryId;
+            this.displayName = saved.displayName;
 
-            const accessoryInfo = new AccessoryInfo(accessoryName, accessoryId);
+            this.pincode = saved.pincode;
 
-            accessoryInfo.displayName = saved.displayName;
-            accessoryInfo.category = saved.category;
+            this.longTermPublicKey = Buffer.from(saved.longTermPublicKey, "hex");
+            this.longTermSecretKey = Buffer.from(saved.longTermSecretKey, "hex");
 
-            accessoryInfo.pincode = saved.pincode;
-
-            accessoryInfo.longTermPublicKey = Buffer.from(saved.longTermPublicKey, "hex");
-            accessoryInfo.longTermSecretKey = Buffer.from(saved.longTermSecretKey, "hex");
-
-            accessoryInfo.configVersion = saved.configVersion;
-            accessoryInfo.setupID = saved.setupID;
+            this.configNumber = saved.configNumber;
+            this.setupID = saved.setupID;
 
             const pairings: SavedPairingInformation[] = saved.pairedClients;
             pairings.forEach(savedPairing => {
@@ -222,38 +240,34 @@ export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
                     permission: savedPairing.permission,
                 };
 
-                accessoryInfo.pairedClients[savedPairing.clientId] = pairingInformation;
+                this.pairedClients[savedPairing.clientId] = pairingInformation;
                 if (pairingInformation.permission === PermissionTypes.ADMIN) {
-                    accessoryInfo.pairedAdminClientCount++;
+                    this.pairedAdminClientCount++;
                 }
             });
 
-            return accessoryInfo;
         } else {
-            const accessoryId = this.genRandomMac();
-            const accessoryInfo = new AccessoryInfo(accessoryName, accessoryId);
+            this.accessoryId = AccessoryInfo.genRandomMac();
 
             // we need to create a network unique displayName
-            accessoryInfo.displayName = accessoryName + " "
+            this.displayName = this.accessoryName + " "
                 + crypto.createHash("sha512")
-                    .update(accessoryId, 'utf8')
+                    .update(this.accessoryId, 'utf8')
                     .digest("hex").slice(0, 4).toUpperCase();
-            accessoryInfo.category = category;
-            accessoryInfo.pincode = pincode || await SetupCodeGenerator.generate();
-            if (!pincode) {
+
+            if (this.pincode === "") {
+                this.pincode = await SetupCodeGenerator.generate();
                 // TODO do we have a nice way for this?
-                console.log("Generated setup code: " + accessoryInfo.pincode);
+                console.log("Generated setup code: " + this.pincode);
             }
 
             const longTerm = tweetnacl.sign.keyPair(); // generate new lt key pair
-            accessoryInfo.longTermPublicKey = Buffer.from(longTerm.publicKey);
-            accessoryInfo.longTermSecretKey = Buffer.from(longTerm.secretKey);
+            this.longTermPublicKey = Buffer.from(longTerm.publicKey);
+            this.longTermSecretKey = Buffer.from(longTerm.secretKey);
 
-            accessoryInfo.setupID = this.generateSetupID();
+            this.setupID = AccessoryInfo.generateSetupID();
 
-            await accessoryInfo.save();
-
-            return accessoryInfo;
+            await this.save();
         }
     }
 
@@ -277,8 +291,8 @@ export class AccessoryInfo extends EventEmitter<AccessoryInfoEventMap> {
         const bytes = crypto.randomBytes(4);
         let setupID = '';
 
-        for (var i = 0; i < 4; i++) {
-            var index = bytes.readUInt8(i) % 26;
+        for (let i = 0; i < 4; i++) {
+            const index = bytes.readUInt8(i) % 26;
             setupID += chars.charAt(index);
         }
 

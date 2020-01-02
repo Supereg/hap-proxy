@@ -5,15 +5,24 @@ let storageInit = false;
 
 export namespace StorageManager {
 
+    let initPromise: Promise<any> = Promise.resolve();
+
     export async function init() {
         if (!storageInit) {
             storageInit = true;
-            await storage.init(); // TODO storage path
+            initPromise = initPromise.then(() => storage.init()); // TODO storage path
         }
+
+        await initPromise;
     }
 
     export function getItem(key: string): Promise<any> {
-        return storage.getItem(key);
+        try {
+            return storage.getItem(key);
+        } catch (e) {
+            console.log(e.stack);
+            throw new Error("asdf");
+        }
     }
 
     export function setItem(key: string, value: any, options?: DatumOptions): Promise<WriteFileResult> {

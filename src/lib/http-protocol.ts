@@ -9,6 +9,7 @@ export enum ParsingState {
 }
 
 export enum HTTPMethod {
+    // noinspection JSUnusedGlobalSymbols
     GET = "GET",
     HEAD = "HEAD",
     POST = "POST",

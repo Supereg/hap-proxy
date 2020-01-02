@@ -1,19 +1,25 @@
 import crypto from 'crypto';
 import bonjour, { BonjourHap, MulticastOptions, Service } from 'bonjour-hap';
 import {AccessoryInfo} from "../storage/AccessoryInfo";
+import createDebug from 'debug';
+
+const debug = createDebug("HAPServer:Advertiser");
 
 export class Advertiser {
 
     static protocolVersion: string = "1.1";
-    static protocolVersionService: string = "1.1.0";
+    //static protocolVersionService: string = "1.1.0";
+
+    readonly accessoryInfo: AccessoryInfo;
 
     private bonjourService: BonjourHap;
-    private advertisement: Service | null;
+    private advertisement?: Service;
     private readonly setupHash: string;
 
-    constructor(public accessoryInfo: AccessoryInfo, mdnsConfig?: MulticastOptions) {
+    constructor(accessoryInfo: AccessoryInfo, mdnsConfig?: MulticastOptions) {
+        this.accessoryInfo = accessoryInfo;
+
         this.bonjourService = bonjour(mdnsConfig);
-        this.advertisement = null;
         this.setupHash = this.genSetupHash();
     }
 
@@ -41,26 +47,28 @@ export class Advertiser {
             txt: this.txtRecord(),
             host: host
         });
+
+        debug("Started advertisement for '%s'", this.accessoryInfo.displayName);
     }
 
     updateAdvertisement(){
         if (this.advertisement) {
             this.advertisement.updateTxt(this.txtRecord());
+
+            debug("Updated advertisement for '%s'", this.accessoryInfo.displayName);
         }
     }
 
     stopAdvertising() {
+        debug("Stopping advertisement for '%s'", this.accessoryInfo.displayName);
+
         if (this.advertisement) {
             this.advertisement.stop();
             this.advertisement.destroy();
-            this.advertisement = null;
+            this.advertisement = undefined;
         }
 
         this.bonjourService.destroy();
-    }
-
-    isAdvertising() {
-        return this.advertisement !== null;
     }
 
     private txtRecord() {
@@ -69,7 +77,7 @@ export class Advertiser {
             pv: Advertiser.protocolVersion,
             id: this.accessoryInfo.accessoryId,
             // "accessory conf" - represents the "configuration version" of an Accessory. Increasing this "version number" signals iOS devices to re-fetch /accessories data.
-            "c#": `${this.accessoryInfo.configVersion}`,
+            "c#": `${this.accessoryInfo.configNumber}`,
             "s#": "1", // "accessory state", should always be 1 however certified devices increment it :thinking:
             "ff": "0",
             "ci": `${this.accessoryInfo.category}`,

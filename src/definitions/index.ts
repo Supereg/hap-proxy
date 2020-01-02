@@ -1,2 +1,2 @@
-export * from './services'
-export * from './characteristics'
+export * from './ServiceType'
+export * from './CharacteristicType'

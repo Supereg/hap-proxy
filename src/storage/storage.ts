@@ -17,12 +17,7 @@ export namespace StorageManager {
     }
 
     export function getItem(key: string): Promise<any> {
-        try {
-            return storage.getItem(key);
-        } catch (e) {
-            console.log(e.stack);
-            throw new Error("asdf");
-        }
+        return storage.getItem(key);
     }
 
     export function setItem(key: string, value: any, options?: DatumOptions): Promise<WriteFileResult> {

@@ -53,7 +53,6 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
 
     constructor(context: HAPProxy, parent: ServiceFilter, iid: number) {
         super(context, parent, iid);
-        console.log("Constructed filter for HDS Setup!"); // TODO remove
     }
 
     connectionContext: Record<string, {
@@ -64,13 +63,11 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
     }> = {};
 
     async filterRead(serverConnection: HAPServerConnection, clientConnection: HAPClientConnection, readValue: string): Promise<string> {
-        console.log("Filtering read HDS"); // TODO remove
         const context = this.connectionContext[serverConnection.sessionID];
         return context? context.lastResponse: "";
     }
 
     async filterWrite(serverConnection: HAPServerConnection, clientConnection: HAPClientConnection, writtenValue: string): Promise<string> {
-        console.log("Filtering write HDS"); // TODO remove
         let context = this.connectionContext[serverConnection.sessionID];
         if (!context) {
             context = {
@@ -96,8 +93,6 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
                 return writtenValue;
             }
 
-            console.log("Received start for hds"); // TODO remove
-
             // generate the salt used for the communication with the accessory
             context.proxyControllerKeySalt = this.dataStreamProxy.generateKeySalt();
 
@@ -115,7 +110,6 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
     }
 
     async filterWriteResponse(serverConnection: HAPServerConnection, clientConnection: HAPClientConnection, writeResponseValue: string): Promise<string> {
-        console.log("Filtering write response HDS"); // TODO remove
         const context = this.connectionContext[serverConnection.sessionID];
         if (!context) {
             return "";
@@ -136,8 +130,6 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
 
         const salt = Buffer.concat([context.proxyControllerKeySalt, accessoryKeySalt]);
 
-        console.log("Received response from remote accessory. Connecting now..."); // TODO remove
-
         return this.dataStreamProxy.setupClient(clientConnection, this.context.client.deviceInfo!.host, port, salt)
             .then(clientConnection => this.dataStreamProxy.setupController(serverConnection, context.controllerKeySalt, clientConnection))
             .then(preparedSession => {
@@ -154,7 +146,7 @@ export class DataStreamTransportManagementServiceSetupDataStreamTransportCharact
                     tlv.encode(SetupDataStreamWriteResponseTypes.ACCESSORY_KEY_SALT, preparedSession.accessoryKeySalt)
                 ]);
 
-                console.log("Returning response to controller!"); // TODO message
+                // console.log("Returning response to controller!"); // TODO message
 
                 return response.toString("base64");
             }).catch(reason => {
@@ -181,11 +173,10 @@ export class DataStreamTransportManagementServiceFilter extends ServiceFilter {
 
     constructor(context: HAPProxy, aid: number, iid: number) {
         super(context, aid, iid);
-        console.log("Constructed HDS Service filter!"); // TODO remove
     }
 
     characteristicFilterDefinitions: Record<string, CharacteristicFilterConstructor<any>> = {
-        [CharacteristicType.SETUP_DATA_STREAM_MANAGEMENT]: DataStreamTransportManagementServiceSetupDataStreamTransportCharacteristicFilter,
+        [CharacteristicType.SETUP_DATA_STREAM_TRANSPORT]: DataStreamTransportManagementServiceSetupDataStreamTransportCharacteristicFilter,
         [CharacteristicType.VERSION]: DataStreamTransportManagementServiceVersionCharacteristic,
     }
 

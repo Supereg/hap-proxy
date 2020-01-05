@@ -540,16 +540,19 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
         // step 3
         return this.connectionChain = this.ensurePairingVerified()
             .then(() => this.sendPairRequest(HTTPRoutes.PAIRINGS, requestTLV))
-            .then(response => {
+            .then((response) => {
                 const body = response.body;
                 const responseTlv = tlv.decode(body);
-                // TODO validate response
 
-                console.log("received pairings body tlv");
-                console.log(responseTlv);
-
-                clientInfo.paired = false;
-                return clientInfo.save();
+                const error = responseTlv[TLVValues.ERROR];
+                if (error) {
+                    const errorCode = error.readUInt8(0);
+                    debug("Error removing pairing: " + TLVErrors[errorCode]);
+                    throw new Error(errorCode + "");
+                } else {
+                    clientInfo.paired = false;
+                    return clientInfo.save();
+                }
             });
     }
 

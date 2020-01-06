@@ -14,7 +14,7 @@ import {
     AttributeDatabase,
     CharacteristicsReadResponse,
     CharacteristicsWriteRequest,
-    CharacteristicsWriteResponse,
+    CharacteristicsWriteResponse, EventNotification,
     HAPStatusCode
 } from "./types/hap-proxy";
 import {IdentifierCache} from "./storage/IdentifierCache";
@@ -147,7 +147,7 @@ export class HAPProxy {
 
         this.serverToClientConnections[serverConnection.sessionID] = clientConnection;
 
-        clientConnection.on(HAPClientConnectionEvents.EVENT_RAW, HAPProxy.forwardEvent.bind(this, serverConnection));
+        clientConnection.on(HAPClientConnectionEvents.EVENT_RAW, this.forwardEvent.bind(this, serverConnection));
         clientConnection.on(HAPClientConnectionEvents.DISCONNECTED, this.handleClientDisconnected.bind(this, serverConnection));
 
         clientConnection.ensureConnected().catch(reason => {
@@ -163,7 +163,15 @@ export class HAPProxy {
         this.client.newConnection().removePairing();
     }
 
-    private static forwardEvent(serverConnection: HAPServerConnection, eventBuf: Buffer) {
+    private forwardEvent(serverConnection: HAPServerConnection, eventBuf: Buffer) {
+        const event: EventNotification = JSON.parse(eventBuf.toString());
+        event.characteristics.forEach(characteristic => {
+            const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
+            const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
+            const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
+            console.log("Event sent for " + serviceName + "." + characteristicName + " with value '" + characteristic.value + "'");
+        });
+
         serverConnection.sendRawEvent(eventBuf);
     }
 

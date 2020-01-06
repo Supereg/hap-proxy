@@ -203,3 +203,7 @@ export interface CharacteristicWriteResponse extends Characteristic {
 export interface CharacteristicEventRequest extends Characteristic {
     ev: boolean,
 }
+
+export interface EventNotification {
+    characteristics: CharacteristicReadResponse[],
+}

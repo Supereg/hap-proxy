@@ -42,17 +42,25 @@ export class DataStreamProxy {
     private handleConnectionIdentified(preparedSession: PreparedDataStreamSession, serverConnection: DataStreamServerConnection) {
         const clientConnection = preparedSession.hdsClientConnection;
 
+        let lastTime = new Date().getTime();
+
         serverConnection.on(DataStreamConnectionEvents.PAYLOAD, DataStreamProxy.forwardPayload.bind(this, clientConnection));
         serverConnection.on(DataStreamConnectionEvents.MESSAGE, (message: DataStreamMessage) => {
-            console.log("Controller > Accessory: " + message.protocol + " " + message.topic);
-            fs.appendFileSync("hds-communication.txt", "Controller > Accessory: " + DataStreamProxy.stringify(message));
+            const took = new Date().getTime() - lastTime;
+            lastTime = new Date().getTime();
+
+            console.log("Controller > Accessory: " + message.protocol + " " + message.topic + " +" + took + "ms");
+            //fs.appendFileSync("hds-communication.txt", "Controller > Accessory: " + DataStreamProxy.stringify(message));
         });
         serverConnection.on(DataStreamConnectionEvents.CLOSED, DataStreamProxy.forwardClose.bind(this, clientConnection));
 
         clientConnection.on(DataStreamConnectionEvents.PAYLOAD, DataStreamProxy.forwardPayload.bind(this, serverConnection));
         clientConnection.on(DataStreamConnectionEvents.MESSAGE, (message: DataStreamMessage) => {
-            console.log("Accessory > Controller: " + message.protocol + " " + message.topic);
-            fs.appendFileSync("hds-communication.txt", "Accessory > Controller: " + DataStreamProxy.stringify(message));
+            const took = new Date().getTime() - lastTime;
+            lastTime = new Date().getTime();
+
+            console.log("Accessory > Controller: " + message.protocol + " " + message.topic + " +" + took + "ms");
+            //fs.appendFileSync("hds-communication.txt", "Accessory > Controller: " + DataStreamProxy.stringify(message));
         });
         clientConnection.on(DataStreamConnectionEvents.CLOSED, DataStreamProxy.forwardClose.bind(this, serverConnection));
     }
@@ -71,12 +79,13 @@ export class DataStreamProxy {
     }
 
     private static forwardPayload(connection: DataStreamConnection<DataStreamConnectionEventMap>, payload: Buffer) {
-        console.log("Forwarding payload");
+        //const printable = payload.toString("hex");
+        //fs.appendFileSync("hds-communication.txt", printable);
+
         connection.sendRawHDSFrame(payload);
     }
 
     private static forwardClose(connection: DataStreamConnection<DataStreamConnectionEventMap>) {
-        console.log("Forwarding close");
         connection.close();
     }
 

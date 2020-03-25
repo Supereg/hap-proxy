@@ -375,7 +375,7 @@ export class DataStreamReader {
 
     readInt64LE() {
         this.ensureLength(8);
-        const value  = this.data.readBigInt64LE(this.readerIndex);
+        const value  = this.data.readBigInt64LE(this.readerIndex); // TODO only supported by node >= v12.0.0
         this.readerIndex += 8;
         return this.cache(value);
     }
@@ -677,7 +677,7 @@ export class DataStreamWriter {
 
         this.ensureLength(9);
         this.writeTag(DataFormatTags.INT64LE);
-        this.data.writeBigInt64LE(int64.value, this.writerIndex);
+        this.data.writeBigInt64LE(int64.value, this.writerIndex); // TODO only supported by node >= v12.0.0
         this.writerIndex += 8;
     }
 

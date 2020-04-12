@@ -1,5 +1,5 @@
 import {HAPEncryptionContext, HAPStates, HAPStatusCode, PairMethods, TLVErrors, TLVValues} from "./types/hap-proxy";
-import net, {AddressInfo, Server, Socket} from "net";
+import net, {Server, Socket} from "net";
 import createDebug from 'debug';
 import * as encryption from "./crypto/encryption";
 import {
@@ -12,7 +12,6 @@ import {
     HTTPStatus
 } from "./lib/http-protocol";
 import {EventEmitter} from "./lib/EventEmitter";
-import srp from 'fast-srp-hap';
 import * as crypto from "crypto";
 import * as tlv from './utils/tlv';
 import * as hkdf from './crypto/hkdf';
@@ -23,6 +22,7 @@ import {once} from "./utils/once";
 import * as url from "url";
 import {ParsedUrlQuery} from "querystring";
 import {uuid} from "./utils/uuid";
+import {SRP, SrpServer} from "fast-srp-hap";
 
 const debug = createDebug("HAPServer");
 const debugCon = createDebug("HAPProxy");
@@ -31,7 +31,7 @@ export type ServerPairSetupSession = {
     connection: HAPServerConnection, // originator
     nextState: HAPStates,
 
-    srpServer: srp.Server,
+    srpServer: SrpServer,
     sharedSecret: Buffer,
     sessionKey: Buffer,
 
@@ -267,7 +267,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
         // step 4
         return new Promise<Partial<HTTPServerResponse>>((resolve, reject) => {
-            srp.genKey(32, (error, key) => {
+            SRP.genKey(32, (error, key) => {
                 if (session !== this.currentPairSetupSession) {
                     reject("pair session changed!");
                     return;
@@ -277,12 +277,12 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
                 const username = Buffer.from("Pair-Setup");
                 // step 6
                 const salt = crypto.randomBytes(16);
-                const srpParams = srp.params["3072"];
+                const srpParams = SRP.params["3072"];
 
                 // TODO handle pairing flags
 
                 const pinBuf = Buffer.from(this.accessoryInfo.pincode);
-                const srpServer = new srp.Server(srpParams, salt, username, pinBuf, key);
+                const srpServer = new SrpServer(srpParams, salt, username, pinBuf, key!);
                 session.srpServer = srpServer;
                 // step 9
                 const publicKey = srpServer.computeB();

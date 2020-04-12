@@ -6,7 +6,6 @@ import * as tlv from './utils/tlv';
 import * as encryption from './crypto/encryption';
 import * as hkdf from './crypto/hkdf';
 import tweetnacl from 'tweetnacl';
-import srp from 'fast-srp-hap';
 import {HTTPContentType, HTTPMethod, HTTPResponse, HTTPResponseParser, HTTPRoutes} from "./lib/http-protocol";
 import {ClientInfo} from "./storage/ClientInfo";
 import {EventEmitter} from "./lib/EventEmitter";
@@ -23,6 +22,7 @@ import {
 } from "./types/hap-proxy";
 import {ParsedUrlQuery} from "querystring";
 import {BonjourBrowserEvents, HAPBonjourBrowser, HAPDeviceInfo} from "./lib/HAPBonjourBrowser";
+import {SRP, SrpClient} from "fast-srp-hap";
 
 const debug = createDebug("HAPClient");
 const debugCon = createDebug("HAPClient:Connection");
@@ -32,7 +32,7 @@ export type PinProvider = (callback: (pinCode: string) => void) => void; // TODO
 export type ClientPairSetupSession = {
     initiator: HAPClientConnection,
 
-    srpClient: srp.Client,
+    srpClient: SrpClient,
     sharedSecret: Buffer,
     sessionKey: Buffer,
 }
@@ -145,9 +145,9 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
         debugCon("Sending pair setup M3");
 
         return this.clientInfo.pincode().then(pinCode => new Promise<void>(resolve => {
-            srp.genKey(32, (err, key) => {
-                const srpParams = srp.params['3072'];
-                const client = new srp.Client(srpParams, salt, Buffer.from("Pair-Setup"), Buffer.from(pinCode), key);
+            SRP.genKey(32, (err, key) => {
+                const srpParams = SRP.params['3072'];
+                const client = new SrpClient(srpParams, salt, Buffer.from("Pair-Setup"), Buffer.from(pinCode), key!);
                 this.pairSetupSession!.srpClient = client;
 
                 client.setB(serverPublicKey);

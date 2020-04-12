@@ -8,9 +8,9 @@
     "node": ">=12.0.0"
   },
   "dependencies": {
-    "bonjour-hap": "^3.5.4",
+    "bonjour-hap": "3.5.4",
     "debug": "^4.1.1",
-    "fast-srp-hap": "^1.0.1",
+    "fast-srp-hap": "2.0.2",
     "ip": "^1.1.5",
     "node-persist": "^3.0.5",
     "tweetnacl": "^1.0.3"
@@ -18,14 +18,14 @@
   "devDependencies": {
     "@types/debug": "^4.1.5",
     "@types/ip": "^1.1.0",
-    "@types/jest": "^25.1.4",
+    "@types/jest": "^25.2.1",
     "@types/node": "^12.0.0",
     "@types/node-persist": "^3.0.0",
-    "jest": "^25.2.0",
+    "jest": "^25.3.0",
     "rimraf": "^3.0.2",
     "simple-plist": "1.1.0",
-    "ts-jest": "^25.2.1",
-    "ts-node": "^8.8.1",
+    "ts-jest": "^25.3.1",
+    "ts-node": "^8.8.2",
     "typescript": "^3.8.3"
   },
   "scripts": {

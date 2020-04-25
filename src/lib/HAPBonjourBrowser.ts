@@ -1,9 +1,8 @@
 import bonjour, {BonjourHap, Browser, MulticastOptions, Service} from 'bonjour-hap';
 import {ClientInfo} from "../storage/ClientInfo";
-import Timeout = NodeJS.Timeout;
-import {MDNSDecoder} from "../utils/mdns-txt-decoder";
 import {EventEmitter} from "./EventEmitter";
 import {HAPAccessoryCategory, PairingStatusFlags} from "../types/hap-proxy";
+import Timeout = NodeJS.Timeout;
 
 export interface HAPDeviceInfo {
     host: string,
@@ -77,7 +76,7 @@ export class HAPBonjourBrowser extends EventEmitter<BonjourBrowserEventMap> {
         this.browser!.stop(); // bonjour-hap currently doesn't support events when txt records get updated
         this.browser = undefined;
 
-        const txt: Record<string, any> = service.rawTxt.reduce((prev, current) => Object.assign(prev, MDNSDecoder.decode(current)), {});
+        const txt: Record<string, any> = service.txt!
         const configNumber = txt["c#"];
         const statusFlag = txt["sf"];
         const protocolVersion = txt["pv"];

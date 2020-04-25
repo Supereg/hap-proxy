@@ -13,7 +13,7 @@
     "README.md"
   ],
   "dependencies": {
-    "bonjour-hap": "3.5.4",
+    "bonjour-hap": "3.5.5",
     "debug": "^4.1.1",
     "fast-srp-hap": "2.0.2",
     "ip": "^1.1.5",

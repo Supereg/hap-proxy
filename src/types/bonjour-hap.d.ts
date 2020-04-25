@@ -16,7 +16,7 @@ declare module 'bonjour-hap' {
         host: string;
         port: number;
         fqdn: string;
-        txt: Nullable<Record<string, string>>;
+        txt: Nullable<Record<string, any>>;
         rawTxt: Buffer[];
         published: boolean;
 

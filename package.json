@@ -56,6 +56,6 @@
   },
   "homepage": "https://github.com/Supereg/hap-proxy",
   "bin": {
-    "hap-proxy": "bin/hap-proxy"
+    "hap-proxy": "bin/hap-proxy.js"
   }
 }

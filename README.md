@@ -20,8 +20,33 @@ Hit me up if you are interested or have any additional ideas.
 ## Installation
 
 ```
-npm install -g hap-proxy
+sudo npm install -g hap-proxy
 ```
+
+## Command Line
+
+When installing `hap-proxy` globally the command-line program `hap-proxy` will be added to your system.  
+Running `hap-proxy -h` will display the following help menu:
+```
+Usage: hap-proxy [options]
+
+Options:
+  -V, --version                      output the version number
+  -p, --port <port>                  define the proxy port (default: 60141)
+  -t, --target-name <instance name>  define the instance name of the device which should be proxied
+  -c, --target-pincode <pincode>     define the pincode with dashes of the homekit device to be proxied
+  --proxy-pincode <pincode>          define a separate pincode for the proxy server
+  -h, --help                         display help for command
+```
+
+When you want to proxy an existing homekit device you must first ensure that the device is unpaired and added to you Wi-Fi.
+
+In order to start up a basic proxy you must supply `--target-name` and `target-pincode`.  
+The first name give the **Instance Name** of the accessory. The easiest way to get that is to open the Home App,
+open the pairing menu and copy the name of the desired accessory.
+
+The target pincode is the pincode of the HomeKit accessory. If `--proxy-pincode` is not defined the proxy server
+will use the same pincode.
 
 ## API
 

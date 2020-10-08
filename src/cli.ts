@@ -21,7 +21,7 @@ function getVersion(): string {
 
 // TODO code linting etc (code style)
 
-const command = new Command()
+const command = new Command("hap-proxy")
   .version(version)
   .option("-p, --port <port>", "define the proxy port", parseInt, 60141)
   .requiredOption("-t, --target-name <instance name>", "define the instance name of the device which should be proxied")

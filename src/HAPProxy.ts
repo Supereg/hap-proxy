@@ -233,10 +233,13 @@ export class HAPProxy {
                     });
                 });
 
+                const body = JSON.stringify(attributeDatabase);
+                console.log(new Date().toISOString() + " attributeDatabase: " + body);
+
                 return chain
                     .then(() => this.identifierCache.save())
                     .then(() => {
-                        httpResponse.body = Buffer.from(JSON.stringify(attributeDatabase));
+                        httpResponse.body = Buffer.from(body);
                         callback(undefined, HAPProxy.responseToServerResponse(httpResponse))
                     });
             })

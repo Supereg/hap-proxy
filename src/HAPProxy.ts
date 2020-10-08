@@ -170,7 +170,7 @@ export class HAPProxy {
             const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
             const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
             const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
-            console.log("Event sent for " + serviceName + "." + characteristicName + " with value '" + characteristic.value + "'");
+            console.log(new Date().toISOString() + " Event sent for " + serviceName + "." + characteristicName + " with value '" + characteristic.value + "'");
         });
 
         serverConnection.sendRawEvent(eventBuf);
@@ -261,7 +261,7 @@ export class HAPProxy {
                     const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
                     const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
                     const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
-                    console.log(serviceName + "." + characteristicName + " was read to be '" + characteristic.value + "'");
+                    console.log(new Date().toISOString() + " " + serviceName + "." + characteristicName + " was read to be '" + characteristic.value + "'");
 
                     const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
 
@@ -307,7 +307,7 @@ export class HAPProxy {
                 const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
                 const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
                 const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
-                console.log(serviceName + "." + characteristicName + " was set to '" + characteristic.value + "'");
+                console.log(new Date().toISOString() + " " + serviceName + "." + characteristicName + " was set to '" + characteristic.value + "'");
 
                 const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
 

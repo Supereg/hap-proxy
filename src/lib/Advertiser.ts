@@ -1,97 +1,141 @@
+import ciao, {
+    CiaoService,
+    MDNSServerOptions,
+    Responder,
+    ServiceEvent,
+    ServiceTxt,
+    ServiceType
+} from "@homebridge/ciao";
+import { ServiceOptions } from "@homebridge/ciao/lib/CiaoService";
 import crypto from 'crypto';
-import bonjour, { BonjourHap, MulticastOptions, Service } from 'bonjour-hap';
+import { EventEmitter } from "events";
 import {AccessoryInfo} from "../storage/AccessoryInfo";
-import createDebug from 'debug';
 
-const debug = createDebug("HAPServer:Advertiser");
+/**
+ * This enum lists all bitmasks for all known status flags.
+ * When the bit for the given bitmask is set, it represents the state described by the name.
+ */
+export const enum StatusFlag {
+    // noinspection JSUnusedGlobalSymbols
+    NOT_PAIRED = 0x01,
+    NOT_JOINED_WIFI = 0x02,
+    PROBLEM_DETECTED = 0x04,
+}
 
-export class Advertiser {
+/**
+ * This enum lists all bitmasks for all known pairing feature flags.
+ * When the bit for the given bitmask is set, it represents the state described by the name.
+ */
+export const enum PairingFeatureFlag {
+    // noinspection JSUnusedGlobalSymbols
+    SUPPORTS_HARDWARE_AUTHENTICATION = 0x01,
+    SUPPORTS_SOFTWARE_AUTHENTICATION = 0x02,
+}
+
+export const enum AdvertiserEvent {
+    UPDATED_NAME = "updated-name",
+}
+
+export declare interface Advertiser {
+    on(event: "updated-name", listener: (name: string) => void): this;
+
+    emit(event: "updated-name", name: string): boolean;
+}
+
+/**
+ * Advertiser uses mdns to broadcast the presence of an Accessory to the local network.
+ *
+ * Note that as of iOS 9, an accessory can only pair with a single client. Instead of pairing your
+ * accessories with multiple iOS devices in your home, Apple intends for you to use Home Sharing.
+ * To support this requirement, we provide the ability to be "discoverable" or not (via a "service flag" on the
+ * mdns payload).
+ */
+export class Advertiser extends EventEmitter {
 
     static protocolVersion: string = "1.1";
-    //static protocolVersionService: string = "1.1.0";
+    // static protocolVersionService: string = "1.1.0";
 
-    readonly accessoryInfo: AccessoryInfo;
-
-    private bonjourService: BonjourHap;
-    private advertisement?: Service;
+    private readonly accessoryInfo: AccessoryInfo;
     private readonly setupHash: string;
 
-    constructor(accessoryInfo: AccessoryInfo, mdnsConfig?: MulticastOptions) {
+    private readonly responder: Responder;
+    private advertisedService?: CiaoService;
+
+    constructor(accessoryInfo: AccessoryInfo, responderOptions?: MDNSServerOptions) {
+        super();
         this.accessoryInfo = accessoryInfo;
+        this.setupHash = this.computeSetupHash();
 
-        this.bonjourService = bonjour(mdnsConfig);
-        this.setupHash = this.genSetupHash();
+        this.responder = ciao.getResponder(responderOptions);
     }
 
-    startAdvertising(port: number) {
-        if (this.advertisement) {
-            this.stopAdvertising();
-        }
-
-        /**
-         * The host name of the component is probably better to be
-         * the username of the hosted accessory + '.local'.
-         * By default 'bonjour' doesnt add '.local' at the end of the os.hostname
-         * this causes to return 'raspberrypi' on raspberry pi / raspbian
-         * then when the phone queryies for A/AAAA record it is being queried
-         * on normal dns, not on mdns. By Adding the username of the accessory
-         * probably the problem will also fix a possible problem
-         * of having multiple pi's on same network
-         */
-        const host = this.accessoryInfo.accessoryId.replace(/:/ig, "_") + '.local';
-
-        this.advertisement = this.bonjourService.publish({
+    public createService(port: number, serviceOptions?: Partial<ServiceOptions>): void {
+        this.advertisedService = this.responder.createService({
             name: this.accessoryInfo.displayName,
-            type: "hap",
+            type: ServiceType.HAP,
+            txt: this.createTxt(),
             port: port,
-            txt: this.txtRecord(),
-            host: host
+            // host will default now to <displayName>.local, spaces replaced with dashes
+            ...serviceOptions,
         });
-
-        debug("Started advertisement for '%s'", this.accessoryInfo.displayName);
+        this.advertisedService.on(ServiceEvent.NAME_CHANGED, this.emit.bind(this, AdvertiserEvent.UPDATED_NAME));
     }
 
-    updateAdvertisement(){
-        if (this.advertisement) {
-            this.advertisement.updateTxt(this.txtRecord());
+    public startAdvertising(): Promise<void> {
+        return this.advertisedService!.advertise();
+    }
 
-            debug("Updated advertisement for '%s'", this.accessoryInfo.displayName);
+    public updateAdvertisement(): void {
+        this.advertisedService!.updateTxt(this.createTxt());
+    }
+
+    public destroyAdvertising(): Promise<void> {
+        return this.advertisedService!.destroy();
+    }
+
+    public async shutdown(): Promise<void> { // TODO shutdown
+        await this.destroyAdvertising(); // would also be done by the shutdown method below
+        await this.responder.shutdown();
+        this.removeAllListeners();
+    }
+
+    private createTxt(): ServiceTxt {
+        const statusFlags: StatusFlag[] = [];
+
+        if (!this.accessoryInfo.hasPairings()) {
+            statusFlags.push(StatusFlag.NOT_PAIRED);
         }
-    }
 
-    stopAdvertising() {
-        debug("Stopping advertisement for '%s'", this.accessoryInfo.displayName);
-
-        if (this.advertisement) {
-            this.advertisement.stop();
-            this.advertisement.destroy();
-            this.advertisement = undefined;
-        }
-
-        this.bonjourService.destroy();
-    }
-
-    private txtRecord() {
         return {
-            md: this.accessoryInfo.displayName,
-            pv: Advertiser.protocolVersion,
-            id: this.accessoryInfo.accessoryId,
-            // "accessory conf" - represents the "configuration version" of an Accessory. Increasing this "version number" signals iOS devices to re-fetch /accessories data.
-            "c#": `${this.accessoryInfo.configNumber}`,
-            "s#": "1", // "accessory state", should always be 1 however certified devices increment it :thinking:
-            "ff": "0",
-            "ci": `${this.accessoryInfo.category}`,
-            "sf": this.accessoryInfo.hasPairings() ? "0" : "1",
-            "sh": this.setupHash
+            "c#": this.accessoryInfo.configNumber, // current configuration number
+            ff: Advertiser.ff(), // pairing feature flags
+            id: this.accessoryInfo.accessoryId, // device id
+            md: this.accessoryInfo.displayName, // model name TODO we don't know the model yet
+            pv: Advertiser.protocolVersion, // protocol version
+            "s#": 1, // current state number (must be 1)
+            sf: Advertiser.sf(...statusFlags), // status flags
+            ci: this.accessoryInfo.category,
+            sh: this.setupHash,
         };
     }
 
-    private genSetupHash() {
-        const material = this.accessoryInfo.setupID + this.accessoryInfo.accessoryId;
-        const hash = crypto.createHash("sha512");
-        hash.update(material);
-
-        return hash.digest().slice(0, 4).toString("base64");
+    private computeSetupHash(): string {
+        const hash = crypto.createHash('sha512');
+        hash.update(this.accessoryInfo.setupID + this.accessoryInfo.accessoryId.toUpperCase());
+        return hash.digest().slice(0, 4).toString('base64');
     }
+
+    public static ff(...flags: PairingFeatureFlag[]): number {
+        let value = 0;
+        flags.forEach(flag => value |= flag);
+        return value;
+    }
+
+    public static sf(...flags: StatusFlag[]): number {
+        let value = 0;
+        flags.forEach(flag => value |= flag);
+        return value;
+    }
+
 }
 

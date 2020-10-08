@@ -1,28 +1,13 @@
-import createDebug from 'debug';
-import assert from 'assert';
-import * as hkdf from '../crypto/hkdf';
 import crypto from 'crypto';
+import createDebug from 'debug';
 import net, {Socket} from 'net';
-import {EventEmitter as NodeEventEmitter} from "events";
-import {EventEmitter} from "../lib/EventEmitter";
+import * as encryption from '../crypto/encryption';
 import {HAPServerConnection, HAPServerConnectionEvents} from "../HAPServer";
-import {
-    DataStreamMessage,
-    GlobalEventHandler,
-    GlobalRequestHandler,
-    HDSFrame,
-    MessageType,
-    Protocols,
-    Topics
-} from "./index";
-import {
-    ConnectionState,
-    DataStreamConnection,
-    DataStreamConnectionEventMap,
-    DataStreamConnectionEvents
-} from "./DataStreamConnection";
-import Timeout = NodeJS.Timeout;
+import {EventEmitter} from "../lib/EventEmitter";
 import {DataStreamClientConnection} from "./DataStreamClient";
+import {DataStreamConnection, DataStreamConnectionEventMap, DataStreamConnectionEvents} from "./DataStreamConnection";
+import {HDSFrame} from "./index";
+import Timeout = NodeJS.Timeout;
 
 const debug = createDebug('DataStream:Server');
 
@@ -94,8 +79,8 @@ export class DataStreamServer extends EventEmitter<DataStreamServerEventMap> {
         const accessoryToControllerInfo = Buffer.from("HDS-Read-Encryption-Key");
         const controllerToAccessoryInfo = Buffer.from("HDS-Write-Encryption-Key");
 
-        const accessoryToControllerEncryptionKey = hkdf.HKDF("sha512", salt, connection.encryptionContext!.sharedSecret!, accessoryToControllerInfo, 32);
-        const controllerToAccessoryEncryptionKey = hkdf.HKDF("sha512", salt, connection.encryptionContext!.sharedSecret!, controllerToAccessoryInfo, 32);
+        const accessoryToControllerEncryptionKey = encryption.HKDF("sha512", salt, connection.encryptionContext!.sharedSecret!, accessoryToControllerInfo, 32);
+        const controllerToAccessoryEncryptionKey = encryption.HKDF("sha512", salt, connection.encryptionContext!.sharedSecret!, controllerToAccessoryInfo, 32);
 
         const preparedSession: PreparedDataStreamSession = {
             connection: connection,

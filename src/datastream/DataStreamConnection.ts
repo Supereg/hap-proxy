@@ -173,11 +173,11 @@ export abstract class DataStreamConnection<E extends DataStreamConnectionEventMa
         encryption.writeUInt64LE(this.decryptionNonce, this.decryptionNonceBuffer, 0); // update nonce buffer
 
         const key = keyOverwrite || this.decryptionKey!;
-        if (encryption.verifyAndDecrypt(key, this.decryptionNonceBuffer,
-            frame.cipheredPayload, frame.authTag, frame.header, frame.plaintextPayload)) {
+        try {
+            frame.plaintextPayload = encryption.chacha20_poly1305_decryptAndVerify(key, this.decryptionNonceBuffer, frame.header, frame.cipheredPayload, frame.authTag);
             this.decryptionNonce++; // we had a successful encryption, increment the nonce
             return true;
-        } else {
+        } catch (error) {
             // frame decryption or authentication failed. Could happen when our guess for a PreparedDataStreamSession is wrong
             return false;
         }
@@ -284,13 +284,11 @@ export abstract class DataStreamConnection<E extends DataStreamConnectionEventMa
         frameLengthBuffer = frameLengthBuffer.slice(1, 4); // a bit hacky but the only real way to write 24-bit int in node
 
         const frameHeader = Buffer.concat([frameTypeBuffer, frameLengthBuffer]);
-        const authTag = Buffer.alloc(16);
-        const cipheredPayload = Buffer.alloc(payloadBuffer.length);
 
         encryption.writeUInt64LE(this.encryptionNonce++, this.encryptionNonceBuffer);
-        encryption.encryptAndSeal(this.encryptionKey!, this.encryptionNonceBuffer, payloadBuffer, frameHeader, cipheredPayload, authTag);
+        const encrypted = encryption.chacha20_poly1305_encryptAndSeal(this.encryptionKey!, this.encryptionNonceBuffer, frameHeader, payloadBuffer);
 
-        this.socket.write(Buffer.concat([frameHeader, cipheredPayload, authTag]));
+        this.socket.write(Buffer.concat([frameHeader, encrypted.ciphertext, encrypted.authTag]));
 
         /* Useful for debugging outgoing packages and detecting encoding errors
         console.log("SENT DATA: " + payloadBuffer.toString("hex"));

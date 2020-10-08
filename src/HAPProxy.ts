@@ -1,3 +1,9 @@
+import assert from "assert";
+import {ParsedUrlQuery} from "querystring";
+import {CharacteristicTypes, ServiceType, ServiceTypes} from "./definitions";
+import {AccessoryInformationServiceFilter, DataStreamTransportManagementServiceFilter} from "./filters";
+import {CharacteristicFilter} from "./filters/CharacteristicFilter";
+import {ServiceFilter, ServiceFilterConstructor} from "./filters/ServiceFilter";
 import {HAPClient, HAPClientConnection, HAPClientConnectionEvents, HAPClientEvents} from "./HAPClient";
 import {
     HAPServer,
@@ -7,23 +13,18 @@ import {
     HTTPServerResponseCallback
 } from "./HAPServer";
 import {HTTPContentType, HTTPResponse, HTTPServerResponse, HTTPStatus} from "./lib/http-protocol";
-import {ParsedUrlQuery} from "querystring";
-import {AccessoryInformationServiceFilter, DataStreamTransportManagementServiceFilter} from "./filters";
-import {CharacteristicType, CharacteristicTypes, ServiceType, ServiceTypes} from "./definitions";
+import {AccessoryInfo} from "./storage/AccessoryInfo";
+import {ClientInfo} from "./storage/ClientInfo";
+import {IdentifierCache} from "./storage/IdentifierCache";
 import {
     AttributeDatabase,
     CharacteristicsReadResponse,
     CharacteristicsWriteRequest,
-    CharacteristicsWriteResponse, EventNotification,
+    CharacteristicsWriteResponse,
+    EventNotification,
     HAPStatusCode
 } from "./types/hap-proxy";
-import {IdentifierCache} from "./storage/IdentifierCache";
-import assert from "assert";
 import {uuid} from "./utils/uuid";
-import {ClientInfo} from "./storage/ClientInfo";
-import {AccessoryInfo} from "./storage/AccessoryInfo";
-import {ServiceFilter, ServiceFilterConstructor} from "./filters/ServiceFilter";
-import {CharacteristicFilter} from "./filters/CharacteristicFilter";
 
 export class HAPProxy {
 

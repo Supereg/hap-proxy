@@ -4,7 +4,7 @@ export enum TLVValues {
     IDENTIFIER = 0x01,
     SALT = 0x02,
     PUBLIC_KEY = 0x03,
-    PROOF = 0x04,
+    PASSWORD_PROOF = 0x04,
     ENCRYPTED_DATA = 0x05,
     STATE = 0x06,
     ERROR = 0x07,

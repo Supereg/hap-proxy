@@ -1,9 +1,8 @@
 import createDebug from "debug";
 import net, {Socket} from "net";
-import {DataStreamConnection, DataStreamConnectionEventMap, DataStreamConnectionEvents} from "./DataStreamConnection";
+import * as encryption from "../crypto/encryption"
 import {HAPClientConnection, HAPClientConnectionEvents} from "../HAPClient";
-import * as hkdf from "../crypto/hkdf";
-import {HTTPResponse} from "../lib/http-protocol";
+import {DataStreamConnection, DataStreamConnectionEventMap, DataStreamConnectionEvents} from "./DataStreamConnection";
 
 const debug = createDebug('DataStream:Client');
 
@@ -15,8 +14,8 @@ export class DataStreamClient {
         const accessoryToControllerInfo = Buffer.from("HDS-Read-Encryption-Key");
         const controllerToAccessoryInfo = Buffer.from("HDS-Write-Encryption-Key");
 
-        const accessoryToControllerEncryptionKey = hkdf.HKDF("sha512", salt, clientConnection.encryptionContext!.sharedSecret!, accessoryToControllerInfo, 32);
-        const controllerToAccessoryEncryptionKey = hkdf.HKDF("sha512", salt, clientConnection.encryptionContext!.sharedSecret!, controllerToAccessoryInfo, 32);
+        const accessoryToControllerEncryptionKey = encryption.HKDF("sha512", salt, clientConnection.encryptionContext!.sharedSecret!, accessoryToControllerInfo, 32);
+        const controllerToAccessoryEncryptionKey = encryption.HKDF("sha512", salt, clientConnection.encryptionContext!.sharedSecret!, controllerToAccessoryInfo, 32);
 
         const socket = net.createConnection(port, host);
         const connection = new DataStreamClientConnection(socket, clientConnection, controllerToAccessoryEncryptionKey, accessoryToControllerEncryptionKey);

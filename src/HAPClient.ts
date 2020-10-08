@@ -4,7 +4,6 @@ import assert from 'assert';
 import crypto from 'crypto';
 import * as tlv from './utils/tlv';
 import * as encryption from './crypto/encryption';
-import * as hkdf from './crypto/hkdf';
 import tweetnacl from 'tweetnacl';
 import {HTTPContentType, HTTPMethod, HTTPResponse, HTTPResponseParser, HTTPRoutes} from "./lib/http-protocol";
 import {ClientInfo} from "./storage/ClientInfo";
@@ -144,26 +143,23 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
     private sendPairM3(connection: HAPClientConnection, serverPublicKey: Buffer, salt: Buffer): Promise<void> {
         debugCon("Sending pair setup M3");
 
-        return this.clientInfo.pincode().then(pinCode => new Promise<void>(resolve => {
-            SRP.genKey(32, (err, key) => {
-                const srpParams = SRP.params['3072'];
-                const client = new SrpClient(srpParams, salt, Buffer.from("Pair-Setup"), Buffer.from(pinCode), key!);
-                this.pairSetupSession!.srpClient = client;
+        return this.clientInfo.pincode().then(pinCode => SRP.genKey(32).then(key => {
+            const srpParams = SRP.params.hap;
+            const client = new SrpClient(srpParams, salt, Buffer.from("Pair-Setup"), Buffer.from(pinCode), key!);
+            this.pairSetupSession!.srpClient = client;
 
-                client.setB(serverPublicKey);
-                const A = client.computeA();
-                const M1 = client.computeM1();
+            client.setB(serverPublicKey);
+            const A = client.computeA();
+            const M1 = client.computeM1();
 
-                const verifyRequest = tlv.encode(
-                    TLVValues.STATE, HAPStates.M3,
-                    TLVValues.PUBLIC_KEY, A,
-                    TLVValues.PROOF, M1,
-                );
+            const verifyRequest = tlv.encode(
+              TLVValues.STATE, HAPStates.M3,
+              TLVValues.PUBLIC_KEY, A,
+              TLVValues.PASSWORD_PROOF, M1,
+            );
 
-                connection.sendPairRequest(HTTPRoutes.PAIR_SETUP, verifyRequest)
-                    .then(this.handlePairM4.bind(this, connection))
-                    .then(resolve);
-            });
+            return connection.sendPairRequest(HTTPRoutes.PAIR_SETUP, verifyRequest)
+              .then(this.handlePairM4.bind(this, connection))
         }));
     }
 
@@ -183,7 +179,7 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
         const session = this.pairSetupSession!;
         const srpClient = session.srpClient!;
 
-        const serverProof = objects[TLVValues.PROOF];
+        const serverProof = objects[TLVValues.PASSWORD_PROOF];
         const encryptedData = objects[TLVValues.ENCRYPTED_DATA];
 
         try {
@@ -213,7 +209,7 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
         // step 2
         let salt = Buffer.from("Pair-Setup-Controller-Sign-Salt");
         let info = Buffer.from("Pair-Setup-Controller-Sign-Info");
-        const iOSDeviceX = hkdf.HKDF("sha512", salt, sharedSecret, info, 32);
+        const iOSDeviceX = encryption.HKDF("sha512", salt, sharedSecret, info, 32);
 
         // step 3
         const iOSDeviceInfo = Buffer.concat([
@@ -235,12 +231,12 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
         // step 6
         salt = Buffer.from("Pair-Setup-Encrypt-Salt");
         info = Buffer.from("Pair-Setup-Encrypt-Info");
-        session.sessionKey = hkdf.HKDF("sha512", salt, sharedSecret, info, 32);
+        session.sessionKey = encryption.HKDF("sha512", salt, sharedSecret, info, 32);
 
         const nonce = Buffer.from("PS-Msg05");
-        const encryptedData = Buffer.alloc(subTLV.length);
-        const authTag = Buffer.alloc(16);
-        encryption.encryptAndSeal(session.sessionKey, nonce, subTLV, null, encryptedData, authTag);
+        const encrypted = encryption.chacha20_poly1305_encryptAndSeal(session.sessionKey, nonce, null, subTLV);
+        const encryptedData = encrypted.ciphertext;
+        const authTag = encrypted.authTag;
 
         // step 7
         const exchangeRequest = tlv.encode(
@@ -272,9 +268,11 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
         const authTag = encryptedDataContent.slice(-16);
 
         const nonce = Buffer.from("PS-Msg06");
-        const plaintextBuffer = Buffer.alloc(encryptedData.length);
-        if (!encryption.verifyAndDecrypt(session.sessionKey!, nonce, encryptedData, authTag, null, plaintextBuffer)) {
-            debugCon("M6: Could not verify and decrypt!");
+        let plaintextBuffer;
+        try {
+            plaintextBuffer = encryption.chacha20_poly1305_decryptAndVerify(session.sessionKey!, nonce, null, encryptedData, authTag);
+        } catch (error) {
+            debugCon("M6: Could not verify and decrypt: " + error.stack);
             connection.disconnect();
             return Promise.reject("M6: Could not verify and decrypt!");
         }
@@ -287,7 +285,7 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
         // step 3
         const salt = Buffer.from("Pair-Setup-Accessory-Sign-Salt");
         const info = Buffer.from("Pair-Setup-Accessory-Sign-Info");
-        const accessoryX = hkdf.HKDF("sha512", salt, session.srpClient!.computeK(), info, 32);
+        const accessoryX = encryption.HKDF("sha512", salt, session.srpClient!.computeK(), info, 32);
 
         const accessoryInfo = Buffer.concat([
             accessoryX,
@@ -606,18 +604,20 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
         // Step 2
         const encryptionSalt = Buffer.from("Pair-Verify-Encrypt-Salt");
         const encryptionInfo = Buffer.from("Pair-Verify-Encrypt-Info");
-        const sessionKey = hkdf.HKDF("sha512", encryptionSalt, sharedSecret, encryptionInfo, 32);
+        const sessionKey = encryption.HKDF("sha512", encryptionSalt, sharedSecret, encryptionInfo, 32);
 
         session.sharedSecret = sharedSecret;
 
         // Step 3 & 4
         const cipherText = encryptedData.slice(0, -16);
         const authTag = encryptedData.slice(-16);
-        const plaintext = Buffer.alloc(cipherText.length);
 
         const nonce = Buffer.from("PV-Msg02");
-        if (!encryption.verifyAndDecrypt(sessionKey, nonce, cipherText, authTag, null, plaintext)) {
-            console.error("WARNING: M2 - Could not verify cipherText");
+        let plaintext;
+        try {
+           plaintext = encryption.chacha20_poly1305_decryptAndVerify(sessionKey, nonce, null, cipherText, authTag);
+        } catch (error) {
+            console.error("WARNING: M2 - Could not verify cipherText: " + error.stack);
             this.disconnect();
             return Promise.reject("WARNING: M2 - Could not verify cipherText");
         }
@@ -672,15 +672,13 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
         );
 
         // Step 10
-        const cipherText = Buffer.alloc(plainTextTLV.length);
-        const authTag = Buffer.alloc(16);
         const nonce = Buffer.from("PV-Msg03");
-        encryption.encryptAndSeal(encryptionKey, nonce, plainTextTLV, null, cipherText, authTag);
+        const encrypted = encryption.chacha20_poly1305_encryptAndSeal(encryptionKey, nonce, null, plainTextTLV);
 
         // Step 11
         const finishRequest = tlv.encode(
             TLVValues.STATE, HAPStates.M3,
-            TLVValues.ENCRYPTED_DATA, Buffer.concat([cipherText, authTag]),
+            TLVValues.ENCRYPTED_DATA, Buffer.concat([encrypted.ciphertext, encrypted.authTag]),
         );
 
         // Step 12
@@ -711,8 +709,8 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
             const accessoryToControllerInfo = Buffer.from("Control-Read-Encryption-Key");
             const controllerToAccessoryInfo = Buffer.from("Control-Write-Encryption-Key");
 
-            const accessoryToControllerKey = hkdf.HKDF("sha512", salt, sharedSecret, accessoryToControllerInfo, 32);
-            const controllerToAccessoryKey = hkdf.HKDF("sha512", salt, sharedSecret, controllerToAccessoryInfo, 32);
+            const accessoryToControllerKey = encryption.HKDF("sha512", salt, sharedSecret, accessoryToControllerInfo, 32);
+            const controllerToAccessoryKey = encryption.HKDF("sha512", salt, sharedSecret, controllerToAccessoryInfo, 32);
 
             this.encryptionContext = new HAPEncryptionContext(sharedSecret, controllerToAccessoryKey, accessoryToControllerKey);
             this.pairingVerified = true;

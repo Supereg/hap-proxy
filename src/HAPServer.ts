@@ -14,7 +14,6 @@ import {
 import {EventEmitter} from "./lib/EventEmitter";
 import * as crypto from "crypto";
 import * as tlv from './utils/tlv';
-import * as hkdf from './crypto/hkdf';
 import tweetnacl from 'tweetnacl';
 import {Advertiser} from "./lib/Advertiser";
 import {AccessoryInfo, AccessoryInfoEvents, PairingInformation, PermissionTypes} from "./storage/AccessoryInfo";
@@ -129,7 +128,8 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
             const port = address.port;
             debug("Server listening on port %s", port);
 
-            this.advertiser.startAdvertising(port);
+            this.advertiser.createService(port);
+            this.advertiser.startAdvertising();
         }
     }
 
@@ -266,41 +266,36 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         // step 3 - handled above
 
         // step 4
-        return new Promise<Partial<HTTPServerResponse>>((resolve, reject) => {
-            SRP.genKey(32, (error, key) => {
-                if (session !== this.currentPairSetupSession) {
-                    reject("pair session changed!");
-                    return;
-                }
+        return SRP.genKey(32).then(key => {
+            if (session !== this.currentPairSetupSession) {
+                throw new Error("pair session changed!");
+            }
 
-                // step 5
-                const username = Buffer.from("Pair-Setup");
-                // step 6
-                const salt = crypto.randomBytes(16);
-                const srpParams = SRP.params["3072"];
+            // step 5
+            const username = Buffer.from("Pair-Setup");
+            // step 6
+            const salt = crypto.randomBytes(16);
+            const srpParams = SRP.params.hap;
 
-                // TODO handle pairing flags
+            // TODO handle pairing flags
 
-                const pinBuf = Buffer.from(this.accessoryInfo.pincode);
-                const srpServer = new SrpServer(srpParams, salt, username, pinBuf, key!);
-                session.srpServer = srpServer;
-                // step 9
-                const publicKey = srpServer.computeB();
+            session.srpServer = new SrpServer(srpParams, salt, username, Buffer.from(this.accessoryInfo.pincode), key);
+            // step 9
+            const publicKey = session.srpServer.computeB();
 
-                // step 10
-                const response = tlv.encode(
-                    TLVValues.STATE, HAPStates.M2,
-                    TLVValues.PUBLIC_KEY, publicKey,
-                    TLVValues.SALT, salt,
-                    // TODO pairing flags?
-                );
+            // step 10
+            const response = tlv.encode(
+              TLVValues.STATE, HAPStates.M2,
+              TLVValues.PUBLIC_KEY, publicKey,
+              TLVValues.SALT, salt,
+              // TODO pairing flags?
+            );
 
-                session.nextState = HAPStates.M3; // we expect M3 for next request
+            session.nextState = HAPStates.M3; // we expect M3 for next request
 
-                resolve({
-                    data: response,
-                });
-            });
+            return {
+                data: response,
+            };
         });
     }
 
@@ -311,7 +306,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         const srpServer = session.srpServer!;
 
         const publicKey = tlvData[TLVValues.PUBLIC_KEY];
-        const clientProof = tlvData[TLVValues.PROOF];
+        const clientProof = tlvData[TLVValues.PASSWORD_PROOF];
 
         // step 1
         srpServer.setA(publicKey);
@@ -321,7 +316,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         try {
             srpServer.checkM1(clientProof);
         } catch (error) {
-            // TODO debug
+            console.warn("Rejected server pairing as incorrect pin code was supplied!");
             return this.abortPairing(HAPStates.M4, TLVErrors.AUTHENTICATION);
         }
 
@@ -330,7 +325,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
         session.nextState = HAPStates.M5;
         return Promise.resolve({
-           data: tlv.encode(TLVValues.STATE, HAPStates.M4, TLVValues.PROOF, serverProof)
+           data: tlv.encode(TLVValues.STATE, HAPStates.M4, TLVValues.PASSWORD_PROOF, serverProof)
         });
     }
 
@@ -349,12 +344,13 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         // step 2
         let salt = Buffer.from("Pair-Setup-Encrypt-Salt");
         let info = Buffer.from("Pair-Setup-Encrypt-Info");
-        session.sessionKey = hkdf.HKDF("sha512", salt, session.sharedSecret!, info, 32);
+        session.sessionKey = encryption.HKDF("sha512", salt, session.sharedSecret!, info, 32);
 
-        const plaintext = Buffer.alloc(encryptedData.length);
         const nonce = Buffer.from("PS-Msg05");
-
-        if (!encryption.verifyAndDecrypt(session.sessionKey, nonce, encryptedData, authTag, null, plaintext)) {
+        let plaintext;
+        try {
+            plaintext = encryption.chacha20_poly1305_decryptAndVerify(session.sessionKey, nonce, null, encryptedData, authTag);
+        } catch (error) {
             // TODO debug
             return this.abortPairing(HAPStates.M6, TLVErrors.AUTHENTICATION);
         }
@@ -362,7 +358,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         // step 3
         salt = Buffer.from("Pair-Setup-Controller-Sign-Salt");
         info = Buffer.from("Pair-Setup-Controller-Sign-Info");
-        const iOSDeviceX = hkdf.HKDF("sha512", salt, session.sharedSecret!, info, 32);
+        const iOSDeviceX = encryption.HKDF("sha512", salt, session.sharedSecret!, info, 32);
 
         // step 4
         const subTLV = tlv.decode(plaintext);
@@ -397,7 +393,7 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         // step 2
         const salt = Buffer.from("Pair-Setup-Accessory-Sign-Salt");
         const info = Buffer.from("Pair-Setup-Accessory-Sign-Info");
-        const accessoryX = hkdf.HKDF("sha512", salt, session.sharedSecret!, info, 32);
+        const accessoryX = encryption.HKDF("sha512", salt, session.sharedSecret!, info, 32);
 
         // step 3
         const accessoryInfo = Buffer.concat([
@@ -418,14 +414,12 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
 
         // step 6
         const nonce = Buffer.from("PS-Msg06");
-        const encryptedData = Buffer.alloc(subTLV.length);
-        const authTag = Buffer.alloc(16);
-        encryption.encryptAndSeal(session.sessionKey!, nonce, subTLV, null, encryptedData, authTag);
+        const encrypted = encryption.chacha20_poly1305_encryptAndSeal(session.sessionKey!, nonce, null, subTLV);
 
         // step 7
         const exchangeResponse = tlv.encode(
             TLVValues.STATE, HAPStates.M6,
-            TLVValues.ENCRYPTED_DATA, Buffer.concat([encryptedData, authTag]),
+            TLVValues.ENCRYPTED_DATA, Buffer.concat([encrypted.ciphertext, encrypted.authTag]),
         );
 
         // initial pairing is always the admin pairing
@@ -522,19 +516,17 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         // step 6
         const salt = Buffer.from("Pair-Verify-Encrypt-Salt");
         const info = Buffer.from("Pair-Verify-Encrypt-Info");
-        session.sessionKey = hkdf.HKDF("sha512", salt, session.sharedSecret, info, 32);
+        session.sessionKey = encryption.HKDF("sha512", salt, session.sharedSecret, info, 32);
 
         // step 7
         const nonce = Buffer.from("PV-Msg02");
-        const encryptedData = Buffer.alloc(subTLV.length);
-        const authTag = Buffer.alloc(16);
-        encryption.encryptAndSeal(session.sessionKey, nonce, subTLV, null, encryptedData, authTag);
+        const encrypted = encryption.chacha20_poly1305_encryptAndSeal(session.sessionKey, nonce, null, subTLV);
 
         // step 8
         const startResponse = tlv.encode(
             TLVValues.STATE, HAPStates.M2,
             TLVValues.PUBLIC_KEY, session.publicKey,
-            TLVValues.ENCRYPTED_DATA, Buffer.concat([encryptedData, authTag]),
+            TLVValues.ENCRYPTED_DATA, Buffer.concat([encrypted.ciphertext, encrypted.authTag]),
         );
 
         session.nextState = HAPStates.M3;
@@ -552,10 +544,12 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         const encryptedDataContent = tlvData[TLVValues.ENCRYPTED_DATA];
         const encryptedData = encryptedDataContent.slice(0, -16);
         const authTag = encryptedDataContent.slice(-16);
-        const plaintext = Buffer.alloc(encryptedData.length);
 
         const nonce = Buffer.from("PV-Msg03");
-        if (!encryption.verifyAndDecrypt(session.sessionKey!, nonce, encryptedData, authTag, null, plaintext)) {
+        let plaintext;
+        try {
+            plaintext = encryption.chacha20_poly1305_decryptAndVerify(session.sessionKey!, nonce, null, encryptedData, authTag);
+        } catch (error) {
             return this.abortPairVerify(connection, HAPStates.M4, TLVErrors.AUTHENTICATION);
         }
 
@@ -590,8 +584,8 @@ export class HAPServer extends EventEmitter<HAPServerEventMap> {
         const accessoryToControllerInfo = Buffer.from("Control-Read-Encryption-Key");
         const controllerToAccessoryInfo = Buffer.from("Control-Write-Encryption-Key");
 
-        const accessoryToControllerKey = hkdf.HKDF("sha512", salt, session.sharedSecret!, accessoryToControllerInfo, 32);
-        const controllerToAccessoryKey = hkdf.HKDF("sha512", salt, session.sharedSecret!, controllerToAccessoryInfo, 32);
+        const accessoryToControllerKey = encryption.HKDF("sha512", salt, session.sharedSecret!, accessoryToControllerInfo, 32);
+        const controllerToAccessoryKey = encryption.HKDF("sha512", salt, session.sharedSecret!, controllerToAccessoryInfo, 32);
 
         connection.encryptionContext = new HAPEncryptionContext(session.sharedSecret!, accessoryToControllerKey, controllerToAccessoryKey);
         connection.pairingVerified = true;

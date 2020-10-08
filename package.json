@@ -1,6 +1,6 @@
 {
   "name": "hap-proxy",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "An HAP proxy tool written in Typescript",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

@@ -5,7 +5,6 @@ if (!process.env.DEBUG) {
   process.env.DEBUG += ",ciao:disabled";
 }
 
-import {version} from "punycode";
 import {AccessoryInfo} from "./storage/AccessoryInfo";
 import {HAPProxy} from "./HAPProxy";
 import {ClientInfo} from "./storage/ClientInfo";
@@ -22,7 +21,7 @@ function getVersion(): string {
 // TODO code linting etc (code style)
 
 const command = new Command("hap-proxy")
-  .version(version)
+  .version(getVersion())
   .option("-p, --port <port>", "define the proxy port", parseInt, 60141)
   .requiredOption("-t, --target-name <instance name>", "define the instance name of the device which should be proxied")
   .requiredOption("-c, --target-pincode <pincode>", "define the pincode with dashes of the homekit device to be proxied")

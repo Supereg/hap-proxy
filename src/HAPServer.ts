@@ -913,7 +913,7 @@ export class HAPServerConnection extends EventEmitter<HAPServerConnectionEventMa
         this.remoteAddress = this.socket.remoteAddress + ":" + this.socket.remotePort;
         this.sessionID = uuid.generate(this.remoteAddress);
         this.socket.setNoDelay(true);
-        this.socket.setKeepAlive(true);
+        //this.socket.setKeepAlive(true);
     }
 
     disconnect() {

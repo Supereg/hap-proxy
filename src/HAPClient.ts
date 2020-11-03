@@ -382,7 +382,7 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
         this.socket.on('error', this.handleError.bind(this));
         this.socket.on('close', this.handleClosed.bind(this));
 
-        this.socket.setKeepAlive(true);
+        // this.socket.setKeepAlive(true);
         this.socket.setNoDelay(true);
 
         return new Promise<void>((resolve, reject) => {

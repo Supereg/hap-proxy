@@ -1,13 +1,16 @@
-import net, {Socket} from 'net';
-import createDebug from 'debug';
 import assert from 'assert';
 import crypto from 'crypto';
-import * as tlv from './utils/tlv';
-import * as encryption from './crypto/encryption';
+import createDebug from 'debug';
+import {SRP, SrpClient} from "fast-srp-hap";
+import net, {Socket} from 'net';
+import {ParsedUrlQuery} from "querystring";
 import tweetnacl from 'tweetnacl';
+import * as encryption from './crypto/encryption';
+import {PairingFeatureFlag} from "./lib/Advertiser";
+import {EventEmitter} from "./lib/EventEmitter";
+import {BonjourBrowserEvents, HAPBonjourBrowser, HAPDeviceInfo} from "./lib/HAPBonjourBrowser";
 import {HTTPContentType, HTTPMethod, HTTPResponse, HTTPResponseParser, HTTPRoutes} from "./lib/http-protocol";
 import {ClientInfo} from "./storage/ClientInfo";
-import {EventEmitter} from "./lib/EventEmitter";
 import {
     CharacteristicEventRequest,
     CharacteristicReadRequest,
@@ -19,9 +22,7 @@ import {
     TLVErrors,
     TLVValues
 } from "./types/hap-proxy";
-import {ParsedUrlQuery} from "querystring";
-import {BonjourBrowserEvents, HAPBonjourBrowser, HAPDeviceInfo} from "./lib/HAPBonjourBrowser";
-import {SRP, SrpClient} from "fast-srp-hap";
+import * as tlv from './utils/tlv';
 
 const debug = createDebug("HAPClient");
 const debugCon = createDebug("HAPClient:Connection");
@@ -109,13 +110,19 @@ export class HAPClient extends EventEmitter<HAPClientEventMap> {
     private sendPairM1(connection: HAPClientConnection): Promise<void> {
         debugCon("Sending pair setup M1");
 
+        if (!this.deviceInfo) {
+            throw new Error("Bonjour DeviceInfo is undefined when trying to send M1");
+        }
+
         this.pairSetupSession = {
             initiator: connection,
         };
 
+        const withAuthentication = !!(this.deviceInfo.pairingFeatureFlags & PairingFeatureFlag.SUPPORTS_HARDWARE_AUTHENTICATION);
+
         const startRequest = tlv.encode(
             TLVValues.STATE, HAPStates.M1,
-            TLVValues.METHOD, PairMethods.PAIR_SETUP,
+            TLVValues.METHOD, withAuthentication? PairMethods.PAIR_SETUP_WITH_AUTH: PairMethods.PAIR_SETUP,
         );
 
         return connection.sendPairRequest(HTTPRoutes.PAIR_SETUP, startRequest)

@@ -13,6 +13,7 @@ export interface HAPDeviceInfo {
 
     configNumber: number,
     statusFlag: number,
+    pairingFeatureFlags: number;
     paired: boolean,
 
     category: HAPAccessoryCategory,
@@ -78,7 +79,8 @@ export class HAPBonjourBrowser extends EventEmitter<BonjourBrowserEventMap> {
 
         const txt: Record<string, any> = service.txt!
         const configNumber = txt["c#"];
-        const statusFlag = txt["sf"];
+        const statusFlag = parseInt(txt["sf"]);
+        const pairingFlags = parseInt(txt["ff"]);
         const protocolVersion = txt["pv"];
         const id = txt["id"];
 
@@ -102,6 +104,7 @@ export class HAPBonjourBrowser extends EventEmitter<BonjourBrowserEventMap> {
 
             configNumber: configNumber,
             statusFlag: statusFlag,
+            pairingFeatureFlags: pairingFlags,
             paired: paired,
 
             category: category,

@@ -170,7 +170,7 @@ export class HAPProxy {
             const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
             const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
             const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
-            console.log(new Date().toISOString() + " Event sent for " + serviceName + "." + characteristicName + " with value '" + characteristic.value + "'");
+            console.log(`${new Date().toISOString()} Event sent for ${serviceName}.${characteristicName} (aid: ${characteristic.aid}) with value '${characteristic.value}'`);
         });
 
         serverConnection.sendRawEvent(eventBuf);
@@ -264,7 +264,7 @@ export class HAPProxy {
                     const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
                     const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
                     const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
-                    console.log(new Date().toISOString() + " " + serviceName + "." + characteristicName + " was read to be '" + characteristic.value + "'");
+                    console.log(`${new Date().toISOString()} ${serviceName}.${characteristicName} (aid: ${characteristic.aid}) was read to be '${characteristic.value}'`);
 
                     const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
 
@@ -310,7 +310,7 @@ export class HAPProxy {
                 const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
                 const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
                 const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
-                console.log(new Date().toISOString() + " " + serviceName + "." + characteristicName + " was set to '" + characteristic.value + "'");
+                console.log(`${new Date().toISOString()} ${serviceName}.${characteristicName} (aid: ${characteristic.aid}) was set to '${characteristic.value}'`);
 
                 const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
 
@@ -367,7 +367,7 @@ export class HAPProxy {
                         const type = this.identifierCache.lookupType(characteristic.aid, characteristic.iid);
                         const serviceName = ServiceTypes.TYPE_TO_NAME[type.serviceType];
                         const characteristicName = CharacteristicTypes.TYPE_TO_NAME[type.characteristicType];
-                        console.log(serviceName + "." + characteristicName + " write response was '" + characteristic.value + "'");
+                        console.log(`${serviceName}.${characteristicName} (aid: ${characteristic.aid}) write response was '${characteristic.value}'`);
 
                         const filter = this.getCharacteristicFilter(characteristic.aid, characteristic.iid);
                         if (filter) {

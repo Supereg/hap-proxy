@@ -45,7 +45,7 @@ export class HAPBonjourBrowser extends EventEmitter<BonjourBrowserEventMap> {
 
     private readonly promise: Promise<HAPDeviceInfo>;
     private timeout?: Timeout;
-    private promiseResolver?: (value?: HAPDeviceInfo | PromiseLike<HAPDeviceInfo>) => void;
+    private promiseResolver?: (value: HAPDeviceInfo | PromiseLike<HAPDeviceInfo>) => void;
 
     private interval?: Timeout;
 

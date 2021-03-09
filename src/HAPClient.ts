@@ -356,7 +356,7 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
     private socketClosed: boolean = false;
 
     private socketConnectReject?: (reason?: any) => void;
-    private httpRequestResolver?: (value?: HTTPResponse | PromiseLike<HTTPResponse>) => void;
+    private httpRequestResolver?: (value: HTTPResponse | PromiseLike<HTTPResponse>) => void;
 
     private connectionChain: Promise<any>;
 

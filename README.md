@@ -54,5 +54,5 @@ Once I reached a point where the API can be considered stable I'm gonna update t
 
 ## Notes
 
-This project is heavily inspired by the code base of [HAP-NodeJS](https://github.com/KhaosT/HAP-NodeJS)
+This project is heavily inspired by the code base of [HAP-NodeJS](https://github.com/homebridge/HAP-NodeJS)
 (most of the encryption and decryption layers) and [hap-client](https://github.com/forty2/hap-client).

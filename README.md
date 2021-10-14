@@ -41,7 +41,7 @@ Options:
 
 When you want to proxy an existing homekit device you must first ensure that the device is unpaired and added to you Wi-Fi.
 
-In order to start up a basic proxy you must supply `--target-name` and `target-pincode`.  
+In order to start up a basic proxy you must supply `--target-name` and `--target-pincode`.  
 The first name give the **Instance Name** of the accessory. The easiest way to get that is to open the Home App,
 open the pairing menu and copy the name of the desired accessory.
 

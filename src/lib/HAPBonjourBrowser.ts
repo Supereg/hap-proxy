@@ -111,6 +111,8 @@ export class HAPBonjourBrowser extends EventEmitter<BonjourBrowserEventMap> {
         };
 
         if (this.promiseResolver) {
+            console.log(`Discovered ${service.fqdn} at ${service.host}:${service.port} (paired: ${paired}, category: ${category}, protocol: ${protocolVersion})`);
+
             this.promiseResolver(this.deviceInfo);
             this.promiseResolver = undefined;
 

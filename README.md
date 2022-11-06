@@ -7,9 +7,9 @@ and on the other hand it acts as an HomeKit controller to an existing HomeKit ac
 HomeKit Remotes and Secure Video.
 
 `hap-proxy` is currently work in progress and definitely not finished.
-Currently the ambition of the project is to have an hap proxy which can be used for research and reverse engineering.
-The goal is that  `hap-proxy` outputs the communication made between the HomeKit controller (iOS device etc) and the
-proxied accessory in an format like pcap.
+Currently, the ambition of the project is to have a hap proxy which can be used for research and reverse engineering.
+The goal is that  `hap-proxy` outputs the communication made between the HomeKit controller (iOS device etc.) and the
+proxied accessory in a format like pcap.
 
 If there is interest I could imagine adding functionality which could be helpful to more people.
 For example features like integrating one HomeKit accessory into multiple HomeKit homes or adding some kind of
@@ -36,6 +36,7 @@ Options:
   -t, --target-name <instance name>  define the instance name of the device which should be proxied
   -c, --target-pincode <pincode>     define the pincode with dashes of the homekit device to be proxied
   --proxy-pincode <pincode>          define a separate pincode for the proxy server
+  --hostname <hostname>              define an overwrite for the hostname of the target device. By default the hostname is learned from mDNS service discovery
   -h, --help                         display help for command
 ```
 
@@ -50,7 +51,7 @@ will use the same pincode.
 
 ## API
 
-Once I reached a point where the API can be considered stable I'm gonna update this section.
+Once I reached a point where the API can be considered stable I'm going to update this section.
 
 ## Notes
 

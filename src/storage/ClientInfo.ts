@@ -9,6 +9,7 @@ export class ClientInfo {
     readonly accessoryName: string;
     clientId: string = "";
     private readonly pinProvider: string | PinProvider;
+    readonly targetHostnameOverwrite?: string;
 
     longTermPublicKey: Buffer = Buffer.alloc(0);
     longTermSecretKey: Buffer = Buffer.alloc(0);
@@ -19,9 +20,10 @@ export class ClientInfo {
 
     private loaded: boolean = false;
 
-    constructor(accessoryName: string, pinProvider: string | PinProvider) {
+    constructor(accessoryName: string, pinProvider: string | PinProvider, targetHostnameOverwrite?: string) {
         this.accessoryName = accessoryName;
         this.pinProvider = pinProvider;
+        this.targetHostnameOverwrite = targetHostnameOverwrite;
     }
 
     pincode(): Promise<string> {

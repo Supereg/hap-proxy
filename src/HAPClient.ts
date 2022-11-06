@@ -384,7 +384,8 @@ export class HAPClientConnection extends EventEmitter<HAPClientConnectionEventMa
 
         this.socketClosed = false;
 
-        this.socket = net.createConnection(this.client.deviceInfo.port, this.client.deviceInfo.host);
+        const hostname = this.clientInfo.targetHostnameOverwrite ?? this.client.deviceInfo.host;
+        this.socket = net.createConnection(this.client.deviceInfo.port, hostname);
         this.socket.on('data', this.handleIncomingData.bind(this));
         this.socket.on('error', this.handleError.bind(this));
         this.socket.on('close', this.handleClosed.bind(this));

@@ -25,7 +25,8 @@ const command = new Command("hap-proxy")
   .option("-p, --port <port>", "define the proxy port", parseInt, 60141)
   .requiredOption("-t, --target-name <instance name>", "define the instance name of the device which should be proxied")
   .requiredOption("-c, --target-pincode <pincode>", "define the pincode with dashes of the homekit device to be proxied")
-  .option("--proxy-pincode <pincode>", "define a separate pincode for the proxy server");
+  .option("--proxy-pincode <pincode>", "define a separate pincode for the proxy server")
+  .option("--hostname <hostname>", "define an overwrite for the hostname of the target device. By default the hostname is learned from mDNS service discovery");
 
 command.parse(process.argv);
 const opts = command.opts();
@@ -38,10 +39,12 @@ const targetPincode: string = opts.targetPincode;
 const proxyName = "Proxy " + targetName;
 const proxyPincode: string = opts.proxyPincode || targetPincode;
 
+const hostname = opts.hostname;
+
 console.log(`Creating '${proxyName} to proxy ${targetName} on port ${port}...'`);
 
 const accessoryInfo = new AccessoryInfo(proxyName, proxyPincode);
-const clientInfo = new ClientInfo(targetName, targetPincode);
+const clientInfo = new ClientInfo(targetName, targetPincode, hostname);
 
 const proxy = new HAPProxy(clientInfo, accessoryInfo);
 proxy.listen(port);
